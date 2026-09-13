@@ -14,5 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package utils provides command helpers for the isolated end-to-end test suite.
+// Package utils holds the harnesses that more than one test package shares:
+// test certificates, the repository root, the scheme, fixtures, the fake
+// engines and source reader, ServiceAccount kubeconfigs, evaluation through
+// the engine's Rego, diagram validation and a runnable driver.
 package utils

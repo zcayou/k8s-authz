@@ -1,0 +1,22 @@
+rules:
+  idiomatic:
+    directory-package-mismatch:
+      level: ignore
+  imports:
+    unresolved-reference:
+      except-paths:
+        - data.authz.conditions
+        - data.authz.conditions.**
+        - data.authz.state
+        - data.authz.state.**
+        - data.bootstrap
+        - data.bootstrap.**
+  style:
+    external-reference:
+      level: ignore
+    file-length:
+      ignore:
+        files:
+          - internal/engine/assets/traversal.rego
+    line-length:
+      non-breakable-word-threshold: 100

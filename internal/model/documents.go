@@ -1,0 +1,206 @@
+package model
+
+import (
+	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"slices"
+	"strings"
+
+	api "github.com/zcayou/k8s-authz/api/v1alpha1"
+)
+
+type SourceKey struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+}
+
+// SourceInstance identifies the documents one PolicySource serves:
+// the PolicySource incarnation and the normalized API server URL it reads from.
+// It never contains credential material, so rotating a credential keeps
+// document identity.
+type SourceInstance struct {
+	Key    SourceKey `json:"key"`
+	UID    string    `json:"uid"`
+	Origin string    `json:"origin"`
+}
+type DocumentKey struct {
+	Source    SourceInstance `json:"source"`
+	Group     string         `json:"group"`
+	Kind      string         `json:"kind"`
+	Namespace string         `json:"namespace"`
+	Name      string         `json:"name"`
+}
+type Reference struct {
+	Source    SourceKey `json:"source"`
+	Group     string    `json:"group"`
+	Kind      string    `json:"kind"`
+	Namespace string    `json:"namespace"`
+	Name      string    `json:"name"`
+}
+
+func (k DocumentKey) Reference() Reference {
+	return Reference{Source: k.Source.Key, Group: k.Group, Kind: k.Kind, Namespace: k.Namespace, Name: k.Name}
+}
+func (k DocumentKey) String() string {
+	return fmt.Sprintf("%s/%s@%s:%s/%s/%s/%s", k.Source.Key.Namespace, k.Source.Key.Name, k.Source.UID, k.Group, k.Kind, k.Namespace, k.Name)
+}
+func (r Reference) String() string {
+	return fmt.Sprintf("%s/%s:%s/%s/%s/%s", r.Source.Namespace, r.Source.Name, r.Group, r.Kind, r.Namespace, r.Name)
+}
+
+// IssueReason classifies an issue. Validation and the compiler emit these
+// reasons, and consumers compare against the constants.
+type IssueReason string
+
+const (
+	// ReasonInvalid means a document failed strict decoding or validation.
+	ReasonInvalid IssueReason = "Invalid"
+	// ReasonKindMismatch means a reference names a document of a kind its
+	// field can't refer to.
+	ReasonKindMismatch IssueReason = "KindMismatch"
+	// ReasonInternalError means the compiler failed in a way no document
+	// explains.
+	ReasonInternalError              IssueReason = "InternalError"
+	ReasonResourceLimitExceeded      IssueReason = "ResourceLimitExceeded"
+	ReasonSourceUnavailable          IssueReason = "SourceUnavailable"
+	ReasonSourceNotAllowed           IssueReason = "SourceNotAllowed"
+	ReasonInvalidDocument            IssueReason = "InvalidDocument"
+	ReasonMissingReference           IssueReason = "MissingReference"
+	ReasonDepthExceeded              IssueReason = "DepthExceeded"
+	ReasonInvalidSourceRestriction   IssueReason = "InvalidSourceRestriction"
+	ReasonCycle                      IssueReason = "Cycle"
+	ReasonDenyOutsideRoot            IssueReason = "DenyOutsideRoot"
+	ReasonNamespaceScopeConservative IssueReason = "NamespaceScopeConservative"
+	ReasonAllNamespacesNotGranted    IssueReason = "AllNamespacesNotGranted"
+	// ReasonRegoNotAllowed means a condition's source, or a source on its path,
+	// doesn't allow Rego conditions.
+	ReasonRegoNotAllowed IssueReason = "RegoNotAllowed"
+	// ReasonBuiltinNotAllowed means a condition calls a builtin its path
+	// doesn't allow.
+	ReasonBuiltinNotAllowed IssueReason = "BuiltinNotAllowed"
+	// ReasonConditionalProhibition means a prohibition would carry a condition.
+	ReasonConditionalProhibition IssueReason = "ConditionalProhibition"
+	// ReasonGrantsNotComposed means an authority's composed Allow diagram
+	// exceeded its limits, so its root bindings' grants cover a request only
+	// one binding at a time.
+	ReasonGrantsNotComposed IssueReason = "GrantsNotComposed"
+	// ReasonUniversalEnvelope means a Policy's condition decides every request
+	// inside its bound.
+	ReasonUniversalEnvelope IssueReason = "UniversalEnvelope"
+)
+
+type Issue struct {
+	Severity  api.IssueSeverity `json:"severity"`
+	Reason    IssueReason       `json:"reason"`
+	Message   string            `json:"message"`
+	Scope     api.IssueScope    `json:"scope"`
+	Document  *DocumentKey      `json:"document,omitempty"`
+	Endpoint  string            `json:"endpoint,omitempty"`
+	Authority string            `json:"authority,omitempty"`
+	ContextID string            `json:"contextID,omitempty"`
+	Path      []DocumentKey     `json:"path,omitempty"`
+}
+
+// DocumentState is one acquired document. A valid document carries its
+// decoded Document; an invalid one carries only the issues that reject it.
+type DocumentState struct {
+	Key DocumentKey `json:"key"`
+	UID string      `json:"uid"`
+	// Digest covers everything the document contributes to a compilation:
+	// the normalized document and its issues.
+	Digest   string    `json:"digest"`
+	Document *Document `json:"document,omitempty"`
+	Issues   []Issue   `json:"issues,omitempty"`
+	// Object is the canonical JSON of the acquired object, without server-managed
+	// field history. It's what the persistent cache stores.
+	Object []byte `json:"-"`
+}
+
+// Document is a strictly decoded tagged union. Only the payload for Key.Kind
+// is populated.
+type Document struct {
+	Key     DocumentKey `json:"key"`
+	Policy  *Policy     `json:"policy,omitempty"`
+	Binding *Binding    `json:"binding,omitempty"`
+	Set     *PolicySet  `json:"set,omitempty"`
+}
+type Cube map[string]Region
+type Policy struct {
+	Include   []Cube     `json:"include"`
+	Exclude   []Cube     `json:"exclude"`
+	Imports   []Import   `json:"imports"`
+	Condition *Condition `json:"condition,omitempty"`
+}
+
+// Condition is a checked Rego condition. ID is the digest of Rego, and Builtins
+// are the builtins it calls.
+type Condition struct {
+	ID       string     `json:"id"`
+	Rego     string     `json:"rego"`
+	Builtins BuiltinSet `json:"builtins,omitempty"`
+}
+type Import struct {
+	Reference  Reference `json:"reference"`
+	Namespaces []string  `json:"namespaces,omitempty"`
+}
+type Binding struct {
+	Policy    Reference   `json:"policy"`
+	Principal Matcher     `json:"principal"`
+	Namespace string      `json:"namespace,omitempty"`
+	Bound     *Reference  `json:"bound,omitempty"`
+	Sources   []SourceKey `json:"sources,omitempty"`
+	MaxDepth  *int        `json:"maxDepth,omitempty"`
+}
+type PolicySet struct {
+	Bindings     []Reference `json:"bindings"`
+	Prohibitions []Reference `json:"prohibitions"`
+}
+
+// SourceObservation is one source's view. A complete observation carries every
+// collected document; an incomplete one carries the Failure that keeps it from
+// completing. Observations are immutable once emitted: consumers share their
+// maps, slices and documents and never modify them.
+type SourceObservation struct {
+	Instance  SourceInstance
+	Documents map[Reference]DocumentState
+	Failure   Failure
+	Complete  bool
+	// AllowedBuiltins are the builtins the source's conditions may call. Nil
+	// means the source doesn't allow Rego conditions.
+	AllowedBuiltins *BuiltinSet
+}
+
+// Failure is why a source has no complete observation. Reason is a Synchronized
+// condition reason, or the contribution Inert.
+type Failure struct {
+	Reason  string
+	Message string
+}
+
+// Digest is the SHA-256 of value's JSON encoding. encoding/json writes map keys
+// sorted and struct fields in declaration order, so the encoding
+// is deterministic. Callers normalize set-valued lists. value must encode,
+// as the model's types and plain data always do; Digest panics otherwise.
+func Digest(value any) string {
+	hash := sha256.New()
+	if err := json.NewEncoder(hash).Encode(value); err != nil {
+		panic(fmt.Sprintf("digest %T: %v", value, err))
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+func SortReferences(refs []Reference) {
+	slices.SortFunc(refs, func(a, b Reference) int {
+		return cmp.Or(
+			strings.Compare(a.Source.Namespace, b.Source.Namespace),
+			strings.Compare(a.Source.Name, b.Source.Name),
+			strings.Compare(a.Group, b.Group),
+			strings.Compare(a.Kind, b.Kind),
+			strings.Compare(a.Namespace, b.Namespace),
+			strings.Compare(a.Name, b.Name),
+		)
+	})
+}
