@@ -1,0 +1,47 @@
+apiVersion: authorization.zctx.io/v1alpha1
+kind: AuthorizationService
+metadata:
+  namespace: authz-system
+  name: application-authz
+spec:
+  program:
+    type: Kubernetes
+  runtime:
+    type: Deployment
+    deployment:
+      replicas: 2
+    minReadyReplicas: 1
+  listener:
+    spec:
+      type: ClusterIP
+  tls:
+    server:
+      secretRef:
+        name: application-authz-serving-tls
+      caRef:
+        secretKeyRef:
+          name: application-authz-serving-ca
+          key: ca.crt
+    client:
+      caRef:
+        secretKeyRef:
+          name: apiserver-client-ca
+          key: ca.crt
+  endpoints:
+    - name: cluster
+      callers:
+        - commonName: kube-apiserver-authz
+      sourceRefs:
+        - namespace: authz-system
+          name: platform
+        - namespace: authz-system
+          name: teams
+      whenEvaluationFails: Deny
+      authorities:
+        - bindingRef:
+            sourceRef:
+              namespace: authz-system
+              name: platform
+            namespace: platform-policies
+            name: application-identities
+          whenNoPolicyAllows: Deny

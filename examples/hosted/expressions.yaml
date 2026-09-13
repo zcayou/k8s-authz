@@ -1,0 +1,34 @@
+apiVersion: authorization.zctx.io/v1alpha1
+kind: Policy
+metadata:
+  namespace: platform-policies
+  name: operator-access
+spec:
+  include:
+    - apiGroups: ["*"]
+      resources: ["*"]
+      verbs: ["*"]
+  exclude:
+    - apiGroups: [""]
+      resources: [secrets]
+      verbs: [get, list, watch]
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: Policy
+metadata:
+  namespace: platform-policies
+  name: netsec-access
+spec:
+  include:
+    - apiGroups: [cilium.io]
+      resources: ["*"]
+      verbs: ["*"]
+      namespaces: [netsec]
+    - apiGroups: [""]
+      resources: [pods/log]
+      verbs: [get, list]
+      namespaces: [gateway]
+    - apiGroups: [""]
+      resources: [pods/exec]
+      verbs: [create]
+      namespaces: [gateway]

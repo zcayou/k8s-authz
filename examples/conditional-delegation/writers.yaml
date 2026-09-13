@@ -1,0 +1,23 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: team-a
+  name: application-policy-author
+rules:
+  - apiGroups: [authorization.zctx.io]
+    resources: [policies, policybindings, policysets]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  namespace: team-a
+  name: application-policy-authors
+subjects:
+  - kind: Group
+    apiGroup: rbac.authorization.k8s.io
+    name: oidc:team-a-policy-authors
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: application-policy-author

@@ -1,0 +1,101 @@
+apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicySource
+metadata:
+  namespace: authz-system
+  name: platform
+spec:
+  provider:
+    type: Kubernetes
+  collection:
+    - kinds:
+        - Policy
+        - PolicyBinding
+        - PolicySet
+      namespaces:
+        - platform-policies
+      names:
+        - '*'
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicySource
+metadata:
+  namespace: authz-system
+  name: orchestration
+spec:
+  provider:
+    type: Kubernetes
+  collection:
+    - kinds:
+        - Policy
+        - PolicyBinding
+        - PolicySet
+        - Role
+        - RoleBinding
+      namespaces:
+        - elastic-system
+        - confluent
+      names:
+        - '*'
+    - kinds:
+        - ClusterRole
+      names:
+        - workload-reader
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: AuthorizationService
+metadata:
+  namespace: authz-system
+  name: fleet-authz
+spec:
+  program:
+    type: Kubernetes
+  runtime:
+    type: Deployment
+    deployment:
+      replicas: 2
+    minReadyReplicas: 1
+    podTemplate:
+      metadata:
+        labels:
+          team: platform
+      spec:
+        containers:
+          - name: opa
+            resources:
+              requests:
+                cpu: 100m
+                memory: 256Mi
+  listener:
+    spec:
+      type: ClusterIP
+  tls:
+    server:
+      secretRef:
+        name: fleet-authz-server-tls
+      caRef:
+        secretKeyRef:
+          name: fleet-authz-serving-ca
+          key: ca.crt
+    client:
+      caRef:
+        secretKeyRef:
+          name: apiserver-client-ca
+          key: ca.crt
+  endpoints:
+    - name: trace
+      callers:
+        - commonName: kube-apiserver
+      sourceRefs:
+        - namespace: authz-system
+          name: platform
+        - namespace: authz-system
+          name: orchestration
+      whenEvaluationFails: Deny
+      authorities:
+        - bindingRef:
+            sourceRef:
+              namespace: authz-system
+              name: platform
+            namespace: platform-policies
+            name: oidc
+          whenNoPolicyAllows: Deny

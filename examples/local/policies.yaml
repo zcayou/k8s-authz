@@ -1,0 +1,228 @@
+apiVersion: authorization.zctx.io/v1alpha1
+kind: Policy
+metadata:
+  namespace: platform-policies
+  name: platform-admin
+spec:
+  include:
+    - apiGroups:
+        - '*'
+      resources:
+        - '*'
+      verbs:
+        - '*'
+    - nonResourceURLs:
+        - '*'
+      verbs:
+        - '*'
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: Policy
+metadata:
+  namespace: platform-policies
+  name: protect-system-secrets
+spec:
+  include:
+    - apiGroups:
+        - ""
+      resources:
+        - secrets
+      verbs:
+        - get
+        - list
+        - watch
+      namespaces:
+        - kube-system
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: Policy
+metadata:
+  namespace: platform-policies
+  name: orchestration-access
+spec:
+  include:
+    - apiGroups:
+        - '*'
+      resources:
+        - '*'
+      verbs:
+        - '*'
+      namespaces:
+        - elastic-system
+        - confluent
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: Policy
+metadata:
+  namespace: elastic-system
+  name: full-access
+spec:
+  include:
+    - apiGroups:
+        - '*'
+      resources:
+        - '*'
+      verbs:
+        - '*'
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: Policy
+metadata:
+  namespace: elastic-system
+  name: application-team-access
+spec:
+  include:
+    - apiGroups:
+        - apps
+      resources:
+        - deployments
+      verbs:
+        - get
+        - list
+        - watch
+      namespaces:
+        - confluent
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicyBinding
+metadata:
+  namespace: platform-policies
+  name: oidc
+spec:
+  subjectMatch:
+    requirements:
+      - kind: Group
+        operator: StartsWith
+        names: ['oidc:']
+      - kind: Group
+        operator: NotIn
+        names: [oidc:k8s-root-admins]
+  policyRef:
+    kind: PolicySet
+    name: trace-root
+  constraints:
+    sourceRefs:
+      - namespace: authz-system
+        name: platform
+      - namespace: authz-system
+        name: orchestration
+    maxDepth: 2
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicyBinding
+metadata:
+  namespace: platform-policies
+  name: orchestration
+spec:
+  subjectMatch: {}
+  policyRef:
+    kind: PolicySet
+    sourceRef:
+      namespace: authz-system
+      name: orchestration
+    namespace: elastic-system
+    name: elk
+  constraints:
+    policyRef:
+      name: orchestration-access
+    maxDepth: 1
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicyBinding
+metadata:
+  namespace: elastic-system
+  name: application-team
+spec:
+  subjectMatch: {}
+  policyRef:
+    kind: PolicySet
+    namespace: confluent
+    name: application-team
+  constraints:
+    policyRef:
+      name: application-team-access
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicyBinding
+metadata:
+  namespace: platform-policies
+  name: platform-admins
+spec:
+  subjects:
+    - kind: Group
+      name: oidc:k8s-platform-admins
+  policyRef:
+    name: platform-admin
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicyBinding
+metadata:
+  namespace: platform-policies
+  name: protect-system-secrets
+spec:
+  subjectMatch: {}
+  policyRef:
+    name: protect-system-secrets
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicyBinding
+metadata:
+  namespace: elastic-system
+  name: elk-admins
+spec:
+  subjects:
+    - kind: Group
+      name: oidc:elk-a
+  policyRef:
+    name: full-access
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicyBinding
+metadata:
+  namespace: confluent
+  name: application-readers
+spec:
+  subjects:
+    - kind: Group
+      name: oidc:elk-app-r
+  policyRef:
+    namespace: elastic-system
+    name: full-access
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicySet
+metadata:
+  namespace: platform-policies
+  name: trace-root
+spec:
+  bindingRefs:
+    - name: platform-admins
+    - name: orchestration
+  prohibitionRefs:
+    - name: protect-system-secrets
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicySet
+metadata:
+  namespace: elastic-system
+  name: elk
+spec:
+  bindingRefs:
+    - name: elk-admins
+    - name: application-team
+    - apiGroup: rbac.authorization.k8s.io
+      kind: RoleBinding
+      name: elk-viewers
+    - apiGroup: rbac.authorization.k8s.io
+      kind: RoleBinding
+      namespace: confluent
+      name: elk-viewers
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicySet
+metadata:
+  namespace: confluent
+  name: application-team
+spec:
+  bindingRefs:
+    - name: application-readers

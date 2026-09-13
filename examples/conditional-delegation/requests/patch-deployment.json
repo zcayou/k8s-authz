@@ -1,0 +1,19 @@
+{
+  "apiVersion": "authorization.k8s.io/v1",
+  "kind": "SubjectAccessReview",
+  "spec": {
+    "user": "system:serviceaccount:team-a:deployer",
+    "groups": [
+      "system:serviceaccounts",
+      "system:serviceaccounts:team-a",
+      "system:authenticated"
+    ],
+    "resourceAttributes": {
+      "namespace": "team-a",
+      "verb": "patch",
+      "group": "apps",
+      "resource": "deployments",
+      "name": "application"
+    }
+  }
+}

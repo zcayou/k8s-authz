@@ -1,0 +1,135 @@
+apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicyBinding
+metadata:
+  namespace: platform-policies
+  name: application-identities
+spec:
+  subjects:
+    - kind: ServiceAccount
+      namespace: team-a
+      name: deployer
+    - kind: Group
+      name: oidc:team-a-users
+  policyRef:
+    kind: PolicySet
+    name: root
+  constraints:
+    sourceRefs:
+      - namespace: authz-system
+        name: platform
+      - namespace: authz-system
+        name: teams
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicySet
+metadata:
+  namespace: platform-policies
+  name: root
+spec:
+  bindingRefs:
+    - name: discovery-and-self-review
+    - name: team-a
+  prohibitionRefs:
+    - name: protect-database-data
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicyBinding
+metadata:
+  namespace: platform-policies
+  name: discovery-and-self-review
+spec:
+  subjectMatch: {}
+  policyRef:
+    name: discovery-and-self-review
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: Policy
+metadata:
+  namespace: platform-policies
+  name: discovery-and-self-review
+spec:
+  include:
+    - nonResourceURLs: [/api, /api/*, /apis, /apis/*, /openapi, /openapi/*, /version]
+      verbs: [get]
+    - apiGroups: [authorization.k8s.io]
+      resources: [selfsubjectaccessreviews, selfsubjectrulesreviews]
+      verbs: [create]
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicyBinding
+metadata:
+  namespace: platform-policies
+  name: protect-database-data
+spec:
+  subjectMatch: {}
+  policyRef:
+    name: protect-database-data
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: Policy
+metadata:
+  namespace: platform-policies
+  name: protect-database-data
+spec:
+  include:
+    - apiGroups: [""]
+      resources: [persistentvolumeclaims]
+      verbs: [delete, deletecollection]
+      namespaces: [team-a]
+      resourceNames: [database-data]
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicyBinding
+metadata:
+  namespace: platform-policies
+  name: team-a
+spec:
+  subjectMatch: {}
+  policyRef:
+    kind: PolicySet
+    sourceRef:
+      namespace: authz-system
+      name: teams
+    namespace: team-a
+    name: application
+  constraints:
+    policyRef:
+      name: team-a-bound
+    maxDepth: 0
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: Policy
+metadata:
+  namespace: platform-policies
+  name: team-a-bound
+spec:
+  include:
+    - apiGroups: [apps]
+      resources: [deployments]
+      verbs: [get, list, watch, create, update, patch, delete, deletecollection]
+      namespaces: [team-a]
+    - apiGroups: [""]
+      resources: [services, configmaps, persistentvolumeclaims]
+      verbs: [get, list, watch, create, update, patch, delete, deletecollection]
+      namespaces: [team-a]
+    - apiGroups: [""]
+      resources: [pods]
+      verbs: [get, list, watch]
+      namespaces: [team-a]
+  condition:
+    rego: |
+      package condition
+
+      default allow := false
+
+      allow if {
+        input.request.resourceAttributes.verb in {"get", "list", "watch"}
+      }
+
+      allow if {
+        now := time.now_ns()
+        time.weekday(now) in {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday"}
+        clock := time.clock(now)
+        clock[0] >= 13
+        clock[0] < 17
+      }

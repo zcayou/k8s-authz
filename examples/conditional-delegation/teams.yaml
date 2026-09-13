@@ -1,0 +1,34 @@
+apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicySet
+metadata:
+  namespace: team-a
+  name: application
+spec:
+  bindingRefs:
+    - name: application-access
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicyBinding
+metadata:
+  namespace: team-a
+  name: application-access
+spec:
+  subjects:
+    - kind: ServiceAccount
+      namespace: team-a
+      name: deployer
+    - kind: Group
+      name: oidc:team-a-users
+  policyRef:
+    name: broad-application-grant
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: Policy
+metadata:
+  namespace: team-a
+  name: broad-application-grant
+spec:
+  include:
+    - apiGroups: ["*"]
+      resources: ["*"]
+      verbs: ["*"]

@@ -1,0 +1,46 @@
+apiVersion: authorization.zctx.io/v1alpha1
+kind: AuthorizationService
+metadata:
+  namespace: authz-system
+  name: fleet-authz
+spec:
+  runtime:
+    type: DaemonSet
+    minReadyReplicas: 2
+  listener:
+    spec:
+      clusterIP: 10.245.0.11
+      trafficDistribution: PreferSameNode
+  tls:
+    server:
+      secretRef:
+        name: fleet-authz-server-tls
+      caRef:
+        secretKeyRef:
+          name: fleet-authz-serving-ca
+          key: ca.crt
+    client:
+      caRef:
+        secretKeyRef:
+          name: hosted-api-client-ca
+          key: ca.crt
+  program:
+    type: Kubernetes
+  endpoints:
+    - name: trace
+      callers:
+        - commonName: kube-apiserver
+      sourceRefs:
+        - namespace: authz-system
+          name: platform
+        - namespace: authz-system
+          name: orchestration
+      whenEvaluationFails: Deny
+      authorities:
+        - bindingRef:
+            sourceRef:
+              namespace: authz-system
+              name: platform
+            namespace: platform-policies
+            name: oidc
+          whenNoPolicyAllows: Deny

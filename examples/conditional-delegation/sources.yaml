@@ -1,0 +1,27 @@
+apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicySource
+metadata:
+  namespace: authz-system
+  name: platform
+spec:
+  provider:
+    type: Kubernetes
+  collection:
+    - kinds: [Policy, PolicyBinding, PolicySet]
+      namespaces: [platform-policies]
+      names: ["*"]
+  rego: {}
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicySource
+metadata:
+  namespace: authz-system
+  name: teams
+spec:
+  provider:
+    type: Kubernetes
+  collection:
+    - kinds: [Policy, PolicyBinding, PolicySet]
+      namespaces: [team-a]
+      names: ["*"]
+  rego: {}

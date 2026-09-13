@@ -1,0 +1,49 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: workload-reader
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+    verbs:
+      - get
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  namespace: elastic-system
+  name: elk-viewers
+subjects:
+  - kind: Group
+    apiGroup: rbac.authorization.k8s.io
+    name: oidc:elk-v
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: workload-reader
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  namespace: confluent
+  name: elk-viewers
+subjects:
+  - kind: Group
+    apiGroup: rbac.authorization.k8s.io
+    name: oidc:elk-v
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: workload-reader

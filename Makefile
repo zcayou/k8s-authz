@@ -1,6 +1,7 @@
 TOOL_IMPORTS := go docker helm envtest kubebuilder
 include tools/make/*.mk
 
+BINARIES = manager=./cmd k8s-authz=./cmd/k8s-authz
 CLEAN_PATHS = dist/ artifacts/
 
 # go run names the binary controller-gen, which the generated files' headers record.

@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: authz-system
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: platform-policies
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-a
