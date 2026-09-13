@@ -17,16 +17,49 @@ GENERATE_CMD += && "$(CRD_REF_DOCS)" --source-path=api/v1alpha1 --config=hack/cr
 # Test configuration
 INTEGRATION_PKGS = ./test/integration
 INTEGRATION_TEST_ENV += OPA_BINARY="$(OPA)"
+KIND_CONFIG = test/e2e/kind-config.yaml
+KIND_MEMBER_CLUSTER ?= $(notdir $(CURDIR))-member-e2e
+KIND_MEMBER_CONFIG = test/e2e/kind-member-config.yaml
+E2E_TEST_ENV += CONTAINER_TOOL="$(CONTAINER_TOOL)" KIND_MEMBER_CLUSTER=$(KIND_MEMBER_CLUSTER)
+E2E_TEST_ARGS += -timeout 60m
 
 test-integration: opa
 regenerate generate-check: crd-ref-docs
 test-unit: rego-test
 validate: rego-check
+setup-test-e2e: setup-test-e2e-apiserver setup-test-e2e-member
+cleanup-test-e2e: cleanup-test-e2e-apiserver cleanup-test-e2e-member
 
 .PHONY: test-race
 test-race: UNIT_TEST_ARGS += -race
 test-race: INTEGRATION_TEST_ARGS += -race
 test-race: test ## Run the unit and integration tests with the race detector.
+
+.PHONY: setup-test-e2e-apiserver
+setup-test-e2e-apiserver: ## Write the authorization configuration the e2e control plane's API server starts with.
+	@mkdir -p tmp/e2e/apiserver
+	@cp test/e2e/authorization-config.yaml tmp/e2e/apiserver/authorization-config.yaml
+
+.PHONY: cleanup-test-e2e-apiserver
+cleanup-test-e2e-apiserver: ## Remove the files the e2e control plane's API server reads.
+	@rm -rf tmp/e2e/apiserver
+
+# The vendored setup-test-e2e matches cluster names by substring, so the member's name must not contain KIND_CLUSTER.
+.PHONY: setup-test-e2e-member
+setup-test-e2e-member: kind ## Create the e2e member Kind cluster, which serves policy and calls the control cluster's engines.
+	@mkdir -p tmp/e2e/member-apiserver
+	@cp test/e2e/authorization-config.yaml tmp/e2e/member-apiserver/authorization-config.yaml
+	@if "$(KIND)" get clusters | grep -qx "$(KIND_MEMBER_CLUSTER)"; then \
+		echo "Kind cluster '$(KIND_MEMBER_CLUSTER)' already exists."; \
+	else \
+		echo "Creating Kind cluster '$(KIND_MEMBER_CLUSTER)'..."; "$(KIND)" create cluster --name $(KIND_MEMBER_CLUSTER) \
+			--config $(KIND_MEMBER_CONFIG) $(if $(KIND_NODE_IMAGE),--image $(KIND_NODE_IMAGE)); \
+	fi
+
+.PHONY: cleanup-test-e2e-member
+cleanup-test-e2e-member: kind ## Delete the e2e member Kind cluster and the files its API server reads.
+	@"$(KIND)" delete cluster --name $(KIND_MEMBER_CLUSTER)
+	@rm -rf tmp/e2e/member-apiserver tmp/e2e/member.kubeconfig
 
 REGO_PATHS = internal/engine/assets internal/engine/explain.rego internal/engine/testdata internal/program/assets internal/program/testdata
 

@@ -1,0 +1,18 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  serviceSubnet: 10.96.0.0/16
+nodes:
+  - role: control-plane
+    extraMounts:
+      - hostPath: tmp/e2e/apiserver
+        containerPath: /etc/kubernetes/pki/k8s-authz-e2e
+    kubeadmConfigPatches:
+      - |
+        kind: ClusterConfiguration
+        apiServer:
+          extraArgs:
+            - name: authorization-config
+              value: /etc/kubernetes/pki/k8s-authz-e2e/authorization-config.yaml
+  - role: worker
+  - role: worker
