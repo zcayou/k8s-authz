@@ -1,0 +1,50 @@
+# Build output
+bin/
+dist/
+build/
+
+# Test artifacts
+*.test
+
+# Go workspace
+go.work
+go.work.sum
+
+# Dependencies
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+
+# Environment and secrets
+.env
+.env.local
+secrets/
+
+# Shell history (devcontainers)
+.zsh_history
+
+# Temporary files
+tmp/
+.tmp/
+
+# Private/local
+.devcontainer/
+TODO
+
+# Go binaries, coverage, and kubeconfig files
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+Dockerfile.cross
+*.out
+*.kubeconfig

@@ -1,0 +1,8 @@
+apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicyBinding
+metadata:
+  labels:
+    app.kubernetes.io/name: k8s-authz
+    app.kubernetes.io/managed-by: kustomize
+  name: policybinding-sample
+spec: {}

@@ -1,0 +1,9 @@
+## Append samples of your project ##
+resources:
+- authorization_v1alpha1_policysource.yaml
+- authorization_v1alpha1_authorizationservice.yaml
+- authorization_v1alpha1_policy.yaml
+- authorization_v1alpha1_policybinding.yaml
+- authorization_v1alpha1_policyset.yaml
+- authorization_v1alpha1_delegation.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples
