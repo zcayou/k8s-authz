@@ -1,0 +1,15 @@
+apiVersion: v2
+name: k8s-authz
+description: Authorization policy operator with managed OPA engines
+type: application
+version: 0.0.0
+appVersion: "0.0.0"
+dependencies:
+  - name: common
+    version: "1.0.0"
+    repository: "file://../common"
+  - name: k8s-authz-crds
+    version: "0.0.0"
+    repository: "file://../k8s-authz-crds"
+    alias: crds
+    condition: crds.enabled

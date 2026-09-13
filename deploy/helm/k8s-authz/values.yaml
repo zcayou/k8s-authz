@@ -1,0 +1,95 @@
+nameOverride: ""
+fullnameOverride: ""
+
+crds:
+  enabled: true
+  keep: true
+
+replicaCount: 2
+
+image:
+  repository: ${REGISTRY}/k8s-authz
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+rbac:
+  create: true
+
+# Empty reconciles every namespace. Listed namespaces must exist, and limit
+# the operator's namespaced permissions to them.
+controlNamespaces: []
+
+management:
+  certificate:
+    secretName: management-client-cert
+  ca:
+    secretName: management-ca
+    key: ca.crt
+
+diagnostics:
+  port: 9443
+  certificate:
+    secretName: diagnostics-server-cert
+
+engine:
+  # Empty uses the stock OPA image the operator pins.
+  image: ""
+  decisionLogs: false
+
+remediationAfter: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+
+resources:
+  limits:
+    cpu: "1"
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+extraArgs: []
+extraEnv: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+priorityClassName: ""
+
+rollingUpdate:
+  maxUnavailable: 1
+  maxSurge: "25%"
+
+metrics:
+  enabled: false
+  port: 8443
+  # Holds tls.crt, tls.key and ca.crt. Empty serves a self-signed certificate.
+  certificate:
+    secretName: ""
+  reader:
+    subjects: []
+
+prometheus:
+  enabled: false
+  scrapeEngines: true

@@ -1,0 +1,162 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "common.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "common.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: {{ .Values.rollingUpdate.maxUnavailable }}
+      maxSurge: {{ .Values.rollingUpdate.maxSurge }}
+  selector:
+    matchLabels:
+      {{- include "common.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "common.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: operator
+        {{- /* k8s-authz explain finds the operator's pods by this label. */}}
+        authorization.zctx.io/component: operator
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        kubectl.kubernetes.io/default-container: manager
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "common.serviceAccountName" . }}
+      {{- if .Values.priorityClassName }}
+      priorityClassName: {{ .Values.priorityClassName }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: manager
+          image: {{ include "common.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --leader-elect
+            {{- if .Values.metrics.enabled }}
+            - --metrics-bind-address=:{{ .Values.metrics.port }}
+              {{- if .Values.metrics.certificate.secretName }}
+            - --metrics-cert-path=/tmp/k8s-authz/metrics-certs
+              {{- end }}
+            {{- else }}
+            - --metrics-bind-address=0
+            {{- end }}
+            - --health-probe-bind-address=:8081
+            - --management-cert-path=/tmp/k8s-authz/management-certs
+            - --management-ca-path=/tmp/k8s-authz/management-ca/ca.crt
+            - --diagnostics-bind-address=:{{ .Values.diagnostics.port }}
+            - --diagnostics-cert-path=/tmp/k8s-authz/diagnostics-certs
+            {{- with .Values.controlNamespaces }}
+            - --control-namespaces={{ join "," . }}
+            {{- end }}
+            {{- with .Values.engine.image }}
+            - --engine-image={{ . }}
+            {{- end }}
+            {{- if .Values.engine.decisionLogs }}
+            - --engine-decision-logs
+            {{- end }}
+            {{- with .Values.remediationAfter }}
+            - --remediation-after={{ . }}
+            {{- end }}
+            {{- range .Values.extraArgs }}
+            - {{ . }}
+            {{- end }}
+          command:
+            - /manager
+          {{- with .Values.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: health
+              containerPort: 8081
+              protocol: TCP
+            - name: diagnostics
+              containerPort: {{ .Values.diagnostics.port }}
+              protocol: TCP
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: management-certs
+              mountPath: /tmp/k8s-authz/management-certs
+              readOnly: true
+            - name: management-ca
+              mountPath: /tmp/k8s-authz/management-ca
+              readOnly: true
+            - name: diagnostics-certs
+              mountPath: /tmp/k8s-authz/diagnostics-certs
+              readOnly: true
+            {{- if and .Values.metrics.enabled .Values.metrics.certificate.secretName }}
+            - name: metrics-certs
+              mountPath: /tmp/k8s-authz/metrics-certs
+              readOnly: true
+            {{- end }}
+      terminationGracePeriodSeconds: 10
+      volumes:
+        - name: management-certs
+          secret:
+            secretName: {{ required "management.certificate.secretName is required" .Values.management.certificate.secretName }}
+            items:
+              - key: tls.crt
+                path: tls.crt
+              - key: tls.key
+                path: tls.key
+        - name: management-ca
+          secret:
+            secretName: {{ required "management.ca.secretName is required" .Values.management.ca.secretName }}
+            items:
+              - key: {{ required "management.ca.key is required" .Values.management.ca.key }}
+                path: ca.crt
+        - name: diagnostics-certs
+          secret:
+            secretName: {{ required "diagnostics.certificate.secretName is required" .Values.diagnostics.certificate.secretName }}
+            items:
+              - key: tls.crt
+                path: tls.crt
+              - key: tls.key
+                path: tls.key
+        {{- if and .Values.metrics.enabled .Values.metrics.certificate.secretName }}
+        - name: metrics-certs
+          secret:
+            secretName: {{ .Values.metrics.certificate.secretName }}
+            items:
+              - key: tls.crt
+                path: tls.crt
+              - key: tls.key
+                path: tls.key
+        {{- end }}
+      {{- include "common.pod.scheduling" . | nindent 6 }}

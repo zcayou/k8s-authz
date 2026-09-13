@@ -1,0 +1,14 @@
+{{- if and .Values.rbac.create .Values.metrics.enabled -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "common.fullname" . }}-metrics-reader
+  labels:
+    {{- include "common.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metrics
+rules:
+- nonResourceURLs:
+  - /metrics
+  verbs:
+  - get
+{{- end }}

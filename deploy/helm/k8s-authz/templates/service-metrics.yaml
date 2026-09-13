@@ -1,0 +1,18 @@
+{{- if .Values.metrics.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "common.fullname" . }}-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "common.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metrics
+spec:
+  ports:
+    - name: https
+      port: {{ .Values.metrics.port }}
+      protocol: TCP
+      targetPort: metrics
+  selector:
+    {{- include "common.selectorLabels" . | nindent 4 }}
+{{- end }}

@@ -3,6 +3,8 @@ include tools/make/*.mk
 
 BINARIES = manager=./cmd k8s-authz=./cmd/k8s-authz
 CLEAN_PATHS = dist/ artifacts/
+# common is a library chart bundled into k8s-authz, not released on its own.
+CHARTS := $(filter-out common,$(CHARTS))
 
 # go run names the binary controller-gen, which the generated files' headers record.
 GENERATE_CMD += && rm -rf api/v1alpha1/applyconfiguration \

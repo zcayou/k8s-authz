@@ -1,0 +1,16 @@
+{{- if .Values.enabled }}
+  {{- if not (.Files.Glob "files/crds/*.yaml") }}
+    {{- fail "no CRDs in files/crds — run 'make helm-crds' before packaging" }}
+  {{- end }}
+  {{- range $path, $_ := .Files.Glob "files/crds/*.yaml" }}
+    {{- $crd := $.Files.Get $path | fromYaml }}
+    {{- if $.Values.keep }}
+      {{- if not $crd.metadata.annotations }}
+        {{- $_ := set $crd.metadata "annotations" dict }}
+      {{- end }}
+      {{- $_ := set $crd.metadata.annotations "helm.sh/resource-policy" "keep" }}
+    {{- end }}
+---
+{{ toYaml $crd }}
+  {{- end }}
+{{- end }}

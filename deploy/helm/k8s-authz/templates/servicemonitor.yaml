@@ -1,0 +1,30 @@
+{{- if and .Values.metrics.enabled .Values.prometheus.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "common.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "common.labels" . | nindent 4 }}
+    app.kubernetes.io/component: monitoring
+spec:
+  endpoints:
+    - path: /metrics
+      port: https
+      scheme: https
+      bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+      tlsConfig:
+        {{- with .Values.metrics.certificate.secretName }}
+        serverName: {{ include "common.fullname" $ }}-metrics.{{ $.Release.Namespace }}.svc
+        ca:
+          secret:
+            name: {{ . }}
+            key: ca.crt
+        {{- else }}
+        insecureSkipVerify: true
+        {{- end }}
+  selector:
+    matchLabels:
+      {{- include "common.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: metrics
+{{- end }}
