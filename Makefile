@@ -14,6 +14,11 @@ GENERATE_CMD += && $(HOST_GO) run ./cmd/evaluator-gen internal/engine/assets/tra
 GENERATE_CMD += && "$(CRD_REF_DOCS)" --source-path=api/v1alpha1 --config=hack/crd-ref-docs/config.yaml \
 	--renderer=markdown --max-depth=100 --output-path=docs/reference/api.md
 
+# Test configuration
+INTEGRATION_PKGS = ./test/integration
+INTEGRATION_TEST_ENV += OPA_BINARY="$(OPA)"
+
+test-integration: opa
 regenerate generate-check: crd-ref-docs
 test-unit: rego-test
 validate: rego-check
