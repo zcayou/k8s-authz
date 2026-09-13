@@ -40,6 +40,14 @@ patches:
   target:
     kind: Deployment
 
+# The manager requires its management and diagnostics certificates; docs/operations/installation.md lists the Secrets.
+- path: cert_management_manager_patch.yaml
+  target:
+    kind: Deployment
+- path: cert_diagnostics_manager_patch.yaml
+  target:
+    kind: Deployment
+
 # Uncomment the patches line if you enable Metrics and CertManager
 # [METRICS-WITH-CERTS] To enable metrics protected with certManager, uncomment the following line.
 # This patch will protect the metrics with certManager self-signed certs.

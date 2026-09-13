@@ -1,0 +1,32 @@
+# This patch adds the args, volumes, and ports to serve the diagnostics endpoint with the diagnostics-server certs.
+
+- op: add
+  path: /spec/template/spec/containers/0/volumeMounts/-
+  value:
+    mountPath: /tmp/k8s-authz/diagnostics-certs
+    name: diagnostics-certs
+    readOnly: true
+
+- op: add
+  path: /spec/template/spec/containers/0/args/-
+  value: --diagnostics-cert-path=/tmp/k8s-authz/diagnostics-certs
+
+- op: add
+  path: /spec/template/spec/containers/0/ports/-
+  value:
+    containerPort: 9443
+    name: diagnostics
+    protocol: TCP
+
+- op: add
+  path: /spec/template/spec/volumes/-
+  value:
+    name: diagnostics-certs
+    secret:
+      secretName: diagnostics-server-cert
+      optional: false
+      items:
+        - key: tls.crt
+          path: tls.crt
+        - key: tls.key
+          path: tls.key

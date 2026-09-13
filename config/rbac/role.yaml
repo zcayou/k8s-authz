@@ -5,17 +5,84 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
-  - authorization.zctx.io
+  - ""
   resources:
-  - authorizationservices
-  - policysources
+  - configmaps
+  - services
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods/eviction
+  verbs:
+  - create
+- apiGroups:
+  - ""
+  resources:
+  - secrets
   verbs:
   - create
   - delete
   - get
   - list
   - patch
-  - update
+  - watch
+- apiGroups:
+  - apiextensions.k8s.io
+  resourceNames:
+  - policies.authorization.zctx.io
+  - policybindings.authorization.zctx.io
+  - policysets.authorization.zctx.io
+  resources:
+  - customresourcedefinitions
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - daemonsets
+  - deployments
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
+- apiGroups:
+  - authorization.zctx.io
+  resources:
+  - authorizationservices
+  - policysources
+  verbs:
+  - get
+  - list
   - watch
 - apiGroups:
   - authorization.zctx.io
@@ -30,6 +97,40 @@ rules:
   - authorizationservices/status
   - policysources/status
   verbs:
-  - get
   - patch
-  - update
+- apiGroups:
+  - authorization.zctx.io
+  resources:
+  - policies
+  - policybindings
+  - policysets
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - policy
+  resources:
+  - poddisruptionbudgets
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - clusterrolebindings
+  - clusterroles
+  - rolebindings
+  - roles
+  verbs:
+  - list
+  - watch

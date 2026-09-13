@@ -14,5 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Command k8s-authz runs the Kubernetes controller manager.
+// Command manager runs the k8s-authz operator, built as bin/manager: the source
+// registry and supervisor and the diagnostics endpoint on every replica,
+// and the leader-elected PolicySource and AuthorizationService controllers.
 package main
