@@ -2,7 +2,29 @@ name: Tests
 
 on:
   push:
+    branches: [main]
+    paths: &code
+      - go.mod
+      - go.sum
+      - api/**
+      - cmd/**
+      - internal/**
+      - test/**
+      - examples/**
+      - config/**
+      - hack/**
+      - tools/**
+      - .regal/**
+      - Makefile
+      - Dockerfile
+      - docker-bake.hcl
+      - .dockerignore
+      - .golangci.yml
+      - .custom-gcl.yml
+      - .github/workflows/**
   pull_request:
+    paths: *code
+  workflow_dispatch:
 
 permissions: {}
 
@@ -10,7 +32,7 @@ jobs:
   test:
     permissions:
       contents: read
-    name: Run on Ubuntu
+    name: Unit
     runs-on: ubuntu-latest
     steps:
       - name: Clone the code
@@ -21,9 +43,38 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
         with:
-          go-version-file: go.mod
+          go-version: "1.26.x"
+          check-latest: true
 
       - name: Running Tests
-        run: |
-          go mod tidy
-          make test
+        run: make test-unit UNIT_TEST_ARGS=-race
+
+  integration:
+    permissions:
+      contents: read
+    name: Integration (Kubernetes ${{ matrix.kubernetes }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - kubernetes: "1.36"
+            envtest: 1.36.2
+          - kubernetes: "1.37"
+            envtest: 1.37.0
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version: "1.26.x"
+          check-latest: true
+
+      - name: Running Tests
+        env:
+          ENVTEST_K8S_VERSION: ${{ matrix.envtest }}
+        run: make test-integration INTEGRATION_TEST_ARGS=-race

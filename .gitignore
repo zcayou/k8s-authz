@@ -3,8 +3,14 @@ bin/
 dist/
 build/
 
+# Helm dependency build output
+deploy/helm/*/charts/
+deploy/helm/*/Chart.lock
+deploy/helm/*/files/crds/
+
 # Test artifacts
 *.test
+artifacts/
 
 # Go workspace
 go.work
@@ -36,7 +42,9 @@ tmp/
 .tmp/
 
 # Private/local
+.dev/
 .devcontainer/
+.cc-writes/
 TODO
 
 # Go binaries, coverage, and kubeconfig files

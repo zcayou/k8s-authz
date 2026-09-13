@@ -1,68 +1,287 @@
 version: "2"
+
 run:
+  go: "1.26"
+  timeout: 10m
+  relative-path-mode: gomod
+  modules-download-mode: readonly
   allow-parallel-runners: true
+  build-tags:
+    - integration
+    - e2e
+
 linters:
   default: none
+
   enable:
+    - asasalint
+    - asciicheck
+    - bidichk
+    - bodyclose
     - copyloopvar
+    - deadcode
     - depguard
+    - dogsled
     - dupl
     - errcheck
+    - errchkjson
+    - errorlint
+    - exhaustive
+    - forbidigo
     - ginkgolinter
     - goconst
+    - gocritic
     - gocyclo
+    - godoclint
+    - goprintffuncname
+    - gosec
     - govet
+    - iface
+    - importas
     - ineffassign
+    - iotamixing
     - lll
-    - modernize
+    - logcheck
+    - makezero
     - misspell
+    - modernize
     - nakedret
+    - nilerr
+    - nolintlint
     - prealloc
     - revive
     - staticcheck
+    # - tagliatelle
+    - testlayout
     - unconvert
     - unparam
     - unused
-    - logcheck
+    - whitespace
+    - zlines
+
   settings:
     custom:
       logcheck:
         type: "module"
         description: Checks Go logging calls for Kubernetes logging conventions.
+      deadcode:
+        type: module
+        description: Reports code that nothing in the program can reach.
+        original-url: github.com/zcayou/go-tools
+        settings:
+          tests: true
+          build-tags: [integration, e2e]
+          test-facing: ['./test/...']
+          api: ['./api/...']
+          api-exempt: [const]
+      testlayout:
+        type: module
+        description: Checks that test files follow the repository's test-suite layout conventions.
+        original-url: github.com/zcayou/go-tools
+        settings:
+          standalone:
+            helper-patterns: [helpers_test.go, fakes_test.go, '*_fixture_test.go']
+          adapter-patterns: [suite_test.go]
+      zlines:
+        type: module
+        description: Reports line breaks a declaration or comment should not have, and line breaks it should.
+        original-url: github.com/zcayou/go-tools
+        settings:
+          comment-exempt: ['+']
+
+    exhaustive:
+      default-signifies-exhaustive: true
+
     depguard:
       rules:
+        main:
+          deny:
+            - pkg: github.com/pkg/errors
+              desc: Use standard library errors/fmt instead.
         forbid-sort-pkg:
           deny:
             - pkg: sort
               desc: Should be replaced with slices package
-    revive:
-      rules:
-        - name: comment-spacings
-        - name: import-shadowing
+
+    iface:
+      enable:
+        - identical
+        - opaque
+        - unexported
+
+    importas:
+      alias:
+        - pkg: k8s.io/api/(\w+)/(v[\w\d]+)
+          alias: $1$2
+        - pkg: k8s.io/client-go/applyconfigurations/(\w+)/(v[\w\d]+)
+          alias: ${1}${2}ac
+        - pkg: k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1
+          alias: apiextensionsv1
+        - pkg: k8s.io/apimachinery/pkg/api/errors
+          alias: apierrors
+        - pkg: k8s.io/apimachinery/pkg/api/meta
+          alias: apimeta
+        - pkg: k8s.io/apimachinery/pkg/apis/meta/v1
+          alias: metav1
+        - pkg: k8s.io/apimachinery/pkg/util/errors
+          alias: kerrors
+        - pkg: k8s.io/apimachinery/pkg/util/runtime
+          alias: utilruntime
+        - pkg: k8s.io/apimachinery/pkg/util/validation
+          alias: utilvalidation
+        - pkg: sigs.k8s.io/controller-runtime
+          alias: ctrl
+        - pkg: sigs.k8s.io/controller-runtime/pkg/controller
+          alias: crcontroller
+        - pkg: sigs.k8s.io/controller-runtime/pkg/source
+          alias: crsource
+        - pkg: github.com/zcayou/k8s-authz/api/v1alpha1
+          alias: api
+      no-unaliased: true
+
+    gosec:
+      excludes:
+        - G104
+
+    govet:
+      enable:
+        - shadow
+
+    errcheck:
+      check-type-assertions: true
+
+    misspell:
+      locale: US
+
     modernize:
       disable:
         - omitzero
+
+    nolintlint:
+      allow-unused: true
+      require-specific: true
+
+    revive:
+      rules:
+        - name: blank-imports
+        - name: comment-spacings
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: error-naming
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: if-return
+        - name: indent-error-flow
+        - name: import-shadowing
+        - name: increment-decrement
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: time-naming
+        - name: unexported-return
+        - name: unreachable-code
+        - name: var-declaration
+        - name: var-naming
+
+    staticcheck:
+      checks: ["all"]
+      dot-import-whitelist:
+        - github.com/onsi/ginkgo/v2
+        - github.com/onsi/gomega
+
+    unused:
+      generated-is-used: true
+      exported-fields-are-used: false
+      local-variables-are-used: false
+
   exclusions:
-    generated: lax
+    generated: strict
+    paths:
+      - zz_generated.*\.go$
     rules:
       - linters:
           - lll
-        path: api/*
+        path: ^api/
+      - linters:
+          - lll
+        path: ^(internal|test)/
       - linters:
           - dupl
+          - goconst
           - lll
-        path: internal/*
-    paths:
-      - third_party$
-      - builtin$
-      - examples$
+        path: _test\.go$
+      # Kubebuilder scaffolds controller tests in package controller.
+      - linters:
+          - testlayout
+        path: ^internal/controller/.*_test\.go$
+        text: "test-package"
+      # Ginkgo DeferCleanup(cancel) is the canonical cancel-call pattern; gosec G118 can't detect it.
+      - linters:
+          - gosec
+        text: "G118"
+      # Suites exec the pinned tool binaries the Makefile hands them through the environment.
+      - linters:
+          - gosec
+        path: _test\.go$
+        text: "G204|G702"
+      # Tests only read and write files under directories they create.
+      - linters:
+          - gosec
+        path: _test\.go$
+        text: "G301|G304|G306|G703"
+      # Test fixtures name fake secrets, and property tests seed math/rand so failures reproduce.
+      - linters:
+          - gosec
+        path: _test\.go$
+        text: "G101|G404"
+      # The CLI reads the files its caller names.
+      - linters:
+          - gosec
+        path: ^internal/cli/
+        text: "G304"
+      # Generators write checked-in source files, which stay world-readable, to the path their caller names.
+      - linters:
+          - gosec
+        path: ^cmd/[a-z]+-gen/
+        text: "G306|G703"
+      # Struct field tags can't be line-wrapped in Go.
+      - linters:
+          - lll
+        source: '\s`[^`]+`$'
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
 formatters:
   enable:
     - gofmt
     - goimports
+    - gci
+  settings:
+    gofmt:
+      rewrite-rules:
+        - pattern: interface{}
+          replacement: any
+    goimports:
+      local-prefixes:
+        - github.com/zcayou/k8s-authz/
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/zcayou/k8s-authz/)
   exclusions:
-    generated: lax
+    generated: strict
     paths:
-      - third_party$
-      - builtin$
-      - examples$
+      - zz_generated.*\.go$
+
+output:
+  formats:
+    text:
+      path: stdout
+      print-issued-lines: true
+      print-linter-name: true
+      colors: true

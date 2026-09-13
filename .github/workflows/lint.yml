@@ -2,7 +2,29 @@ name: Lint
 
 on:
   push:
+    branches: [main]
+    paths: &code
+      - go.mod
+      - go.sum
+      - api/**
+      - cmd/**
+      - internal/**
+      - test/**
+      - examples/**
+      - config/**
+      - hack/**
+      - tools/**
+      - .regal/**
+      - Makefile
+      - Dockerfile
+      - docker-bake.hcl
+      - .dockerignore
+      - .golangci.yml
+      - .custom-gcl.yml
+      - .github/workflows/**
   pull_request:
+    paths: *code
+  workflow_dispatch:
 
 permissions: {}
 
@@ -10,7 +32,7 @@ jobs:
   lint:
     permissions:
       contents: read
-    name: Run on Ubuntu
+    name: Validate
     runs-on: ubuntu-latest
     steps:
       - name: Clone the code
@@ -18,12 +40,14 @@ jobs:
         with:
           persist-credentials: false
 
+      # The linter's plugins build only with Go 1.27, though the module targets 1.26.
       - name: Setup Go
         uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
         with:
-          go-version-file: go.mod
+          go-version: "1.27.x"
+          check-latest: true
 
       - name: Check linter configuration
         run: make lint-config
-      - name: Run linter
-        run: make lint
+      - name: Validate
+        run: make validate
