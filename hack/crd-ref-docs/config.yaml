@@ -1,0 +1,12 @@
+processor:
+  ignoreTypes:
+    - "List$"
+  ignoreFields:
+    - "TypeMeta$"
+
+render:
+  kubernetesVersion: "1.37"
+  knownTypes:
+    - name: Subject
+      package: github.com/zcayou/k8s-authz/api/v1alpha1
+      link: https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.37/#subject-v1-rbac-authorization-k8s-io

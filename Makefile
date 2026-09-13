@@ -11,7 +11,10 @@ GENERATE_CMD += && rm -rf api/v1alpha1/applyconfiguration \
 	&& $(HOST_GO) run sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_TOOLS_VERSION) \
 	applyconfiguration:headerFile="hack/boilerplate.go.txt" paths="./api/..."
 GENERATE_CMD += && $(HOST_GO) run ./cmd/evaluator-gen internal/engine/assets/traversal.rego
+GENERATE_CMD += && "$(CRD_REF_DOCS)" --source-path=api/v1alpha1 --config=hack/crd-ref-docs/config.yaml \
+	--renderer=markdown --max-depth=100 --output-path=docs/reference/api.md
 
+regenerate generate-check: crd-ref-docs
 test-unit: rego-test
 validate: rego-check
 
@@ -47,3 +50,10 @@ REGAL_VERSION ?= v0.42.0
 .PHONY: regal
 regal: ## Install the Regal Rego linter.
 	$(call go-install-tool,$(REGAL),github.com/open-policy-agent/regal,$(REGAL_VERSION))
+
+CRD_REF_DOCS ?= $(LOCALBIN)/crd-ref-docs-$(HOST_PLATFORM)
+CRD_REF_DOCS_VERSION ?= v0.3.0
+
+.PHONY: crd-ref-docs
+crd-ref-docs: ## Install the CRD API reference generator.
+	$(call go-install-tool,$(CRD_REF_DOCS),github.com/elastic/crd-ref-docs,$(CRD_REF_DOCS_VERSION))
