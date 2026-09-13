@@ -21,30 +21,63 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+// PolicySpec defines a reusable permission set.
+// +kubebuilder:validation:XValidation:rule="has(self.include) || has(self.imports) || has(self.condition)",message="one of include, imports or condition is required"
+type PolicySpec struct {
+	// include contains locally allowed operations. Omitted together with imports
+	// on a Policy with a condition, it allows every operation the condition
+	// allows.
+	// +optional
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=256
+	Include []OperationRule `json:"include,omitzero"`
 
-// PolicySpec defines the desired state of Policy
-type PolicySpec struct{}
+	// exclude contains operations removed from the local and imported union.
+	// +optional
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=256
+	Exclude []OperationRule `json:"exclude,omitempty"`
+
+	// imports contains native Role and ClusterRole permission definitions.
+	// +optional
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=64
+	Imports []PolicyImport `json:"imports,omitempty"`
+
+	// condition narrows the policy to the requests its Rego allows.
+	// +optional
+	Condition *PolicyCondition `json:"condition,omitempty"`
+}
+
+// PolicyCondition is a Rego module deciding whether a policy applies to a request.
+type PolicyCondition struct {
+	// rego is a Rego v1 module declaring package condition, whose rule allow
+	// decides the condition.
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=65536
+	Rego string `json:"rego"`
+}
 
 // +kubebuilder:object:root=true
+// +kubebuilder:resource:scope=Namespaced,shortName=azpol,categories=authz
 
-// Policy is the Schema for the policies API
+// Policy defines permissions without subjects or endpoint selection.
 type Policy struct {
 	metav1.TypeMeta `json:",inline"`
 
-	// metadata is a standard object metadata
+	// metadata is standard object metadata.
 	// +optional
 	metav1.ObjectMeta `json:"metadata,omitzero"`
 
-	// spec defines the desired state of Policy
+	// spec defines the policy permissions.
 	// +required
 	Spec PolicySpec `json:"spec"`
 }
 
 // +kubebuilder:object:root=true
 
-// PolicyList contains a list of Policy
+// PolicyList contains a list of Policy objects.
 type PolicyList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitzero"`

@@ -51,12 +51,4 @@ resources:
   kind: PolicySet
   path: github.com/zcayou/k8s-authz/api/v1alpha1
   version: v1alpha1
-- api:
-    crdVersion: v1
-    namespaced: true
-  domain: zctx.io
-  group: authorization
-  kind: Delegation
-  path: github.com/zcayou/k8s-authz/api/v1alpha1
-  version: v1alpha1
 version: "3"

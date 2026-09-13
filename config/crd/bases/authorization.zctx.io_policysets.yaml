@@ -8,16 +8,20 @@ metadata:
 spec:
   group: authorization.zctx.io
   names:
+    categories:
+    - authz
     kind: PolicySet
     listKind: PolicySetList
     plural: policysets
+    shortNames:
+    - azps
     singular: policyset
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: PolicySet is the Schema for the policysets API
+        description: PolicySet assembles binding references for contextual evaluation.
         properties:
           apiVersion:
             description: |-
@@ -37,7 +41,150 @@ spec:
           metadata:
             type: object
           spec:
-            description: spec defines the desired state of PolicySet
+            description: spec defines the policy graph entry.
+            properties:
+              bindingRefs:
+                description: bindingRefs contains custom or native bindings that contribute
+                  Allow.
+                items:
+                  description: BindingRef identifies a custom PolicyBinding or native
+                    RBAC binding.
+                  properties:
+                    apiGroup:
+                      description: |-
+                        apiGroup is the referenced kind's API group. It is derived from kind when
+                        omitted.
+                      maxLength: 253
+                      type: string
+                    kind:
+                      description: |-
+                        kind is PolicyBinding, RoleBinding, or ClusterRoleBinding. Omission means
+                        PolicyBinding.
+                      enum:
+                      - PolicyBinding
+                      - RoleBinding
+                      - ClusterRoleBinding
+                      type: string
+                    name:
+                      description: name is the binding name.
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                    namespace:
+                      description: |-
+                        namespace is the logical namespace of a namespaced binding. Omission
+                        means the referencing document's namespace.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                    sourceRef:
+                      description: sourceRef selects another allowed PolicySource.
+                      properties:
+                        name:
+                          description: name is the PolicySource name.
+                          maxLength: 63
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                          type: string
+                        namespace:
+                          description: namespace is the PolicySource namespace.
+                          maxLength: 63
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                          type: string
+                      required:
+                      - name
+                      - namespace
+                      type: object
+                  required:
+                  - name
+                  type: object
+                  x-kubernetes-validations:
+                  - message: apiGroup must match kind
+                    rule: '!has(self.apiGroup) || self.apiGroup == (has(self.kind)
+                      && self.kind in [''RoleBinding'', ''ClusterRoleBinding''] ?
+                      ''rbac.authorization.k8s.io'' : ''authorization.zctx.io'')'
+                  - message: namespace is forbidden for ClusterRoleBinding
+                    rule: '!(has(self.kind) && self.kind == ''ClusterRoleBinding'')
+                      || !has(self.namespace)'
+                  - message: a reference into another source requires namespace
+                    rule: '!has(self.sourceRef) || has(self.namespace) || (has(self.kind)
+                      && self.kind == ''ClusterRoleBinding'')'
+                maxItems: 256
+                type: array
+                x-kubernetes-list-type: atomic
+              prohibitionRefs:
+                description: prohibitionRefs contains custom or native bindings that
+                  contribute root-only Deny.
+                items:
+                  description: BindingRef identifies a custom PolicyBinding or native
+                    RBAC binding.
+                  properties:
+                    apiGroup:
+                      description: |-
+                        apiGroup is the referenced kind's API group. It is derived from kind when
+                        omitted.
+                      maxLength: 253
+                      type: string
+                    kind:
+                      description: |-
+                        kind is PolicyBinding, RoleBinding, or ClusterRoleBinding. Omission means
+                        PolicyBinding.
+                      enum:
+                      - PolicyBinding
+                      - RoleBinding
+                      - ClusterRoleBinding
+                      type: string
+                    name:
+                      description: name is the binding name.
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                    namespace:
+                      description: |-
+                        namespace is the logical namespace of a namespaced binding. Omission
+                        means the referencing document's namespace.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                    sourceRef:
+                      description: sourceRef selects another allowed PolicySource.
+                      properties:
+                        name:
+                          description: name is the PolicySource name.
+                          maxLength: 63
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                          type: string
+                        namespace:
+                          description: namespace is the PolicySource namespace.
+                          maxLength: 63
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                          type: string
+                      required:
+                      - name
+                      - namespace
+                      type: object
+                  required:
+                  - name
+                  type: object
+                  x-kubernetes-validations:
+                  - message: apiGroup must match kind
+                    rule: '!has(self.apiGroup) || self.apiGroup == (has(self.kind)
+                      && self.kind in [''RoleBinding'', ''ClusterRoleBinding''] ?
+                      ''rbac.authorization.k8s.io'' : ''authorization.zctx.io'')'
+                  - message: namespace is forbidden for ClusterRoleBinding
+                    rule: '!(has(self.kind) && self.kind == ''ClusterRoleBinding'')
+                      || !has(self.namespace)'
+                  - message: a reference into another source requires namespace
+                    rule: '!has(self.sourceRef) || has(self.namespace) || (has(self.kind)
+                      && self.kind == ''ClusterRoleBinding'')'
+                maxItems: 256
+                type: array
+                x-kubernetes-list-type: atomic
             type: object
         required:
         - spec

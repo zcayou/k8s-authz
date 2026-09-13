@@ -19,3 +19,9 @@ rules:
   - policybindings
   verbs:
   - '*'
+- apiGroups:
+  - authorization.zctx.io
+  resources:
+  - policybindings/status
+  verbs:
+  - get

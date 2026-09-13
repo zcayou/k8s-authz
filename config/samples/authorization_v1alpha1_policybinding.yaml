@@ -4,5 +4,11 @@ metadata:
   labels:
     app.kubernetes.io/name: k8s-authz
     app.kubernetes.io/managed-by: kustomize
+  namespace: k8s-authz-system
   name: policybinding-sample
-spec: {}
+spec:
+  subjects:
+    - kind: Group
+      name: pod-readers
+  policyRef:
+    name: policy-sample

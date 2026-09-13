@@ -4,5 +4,8 @@ metadata:
   labels:
     app.kubernetes.io/name: k8s-authz
     app.kubernetes.io/managed-by: kustomize
+  namespace: k8s-authz-system
   name: policyset-sample
-spec: {}
+spec:
+  bindingRefs:
+    - name: policybinding-sample

@@ -4,5 +4,18 @@ metadata:
   labels:
     app.kubernetes.io/name: k8s-authz
     app.kubernetes.io/managed-by: kustomize
+  namespace: k8s-authz-system
   name: policysource-sample
-spec: {}
+spec:
+  provider:
+    type: Kubernetes
+  collection:
+    - kinds:
+        - Policy
+        - PolicyBinding
+        - PolicySet
+      namespaces:
+        - k8s-authz-system
+      names:
+        - '*'
+  rego: {}

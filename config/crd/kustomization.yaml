@@ -7,7 +7,6 @@ resources:
 - bases/authorization.zctx.io_policies.yaml
 - bases/authorization.zctx.io_policybindings.yaml
 - bases/authorization.zctx.io_policysets.yaml
-- bases/authorization.zctx.io_delegations.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

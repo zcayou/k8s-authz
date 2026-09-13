@@ -8,16 +8,20 @@ metadata:
 spec:
   group: authorization.zctx.io
   names:
+    categories:
+    - authz
     kind: Policy
     listKind: PolicyList
     plural: policies
+    shortNames:
+    - azpol
     singular: policy
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Policy is the Schema for the policies API
+        description: Policy defines permissions without subjects or endpoint selection.
         properties:
           apiVersion:
             description: |-
@@ -37,8 +41,456 @@ spec:
           metadata:
             type: object
           spec:
-            description: spec defines the desired state of Policy
+            description: spec defines the policy permissions.
+            properties:
+              condition:
+                description: condition narrows the policy to the requests its Rego
+                  allows.
+                properties:
+                  rego:
+                    description: |-
+                      rego is a Rego v1 module declaring package condition, whose rule allow
+                      decides the condition.
+                    maxLength: 65536
+                    minLength: 1
+                    type: string
+                required:
+                - rego
+                type: object
+              exclude:
+                description: exclude contains operations removed from the local and
+                  imported union.
+                items:
+                  description: OperationRule describes a complete resource or non-resource
+                    operation set.
+                  properties:
+                    apiGroups:
+                      description: apiGroups are the resource API groups.
+                      items:
+                        type: string
+                      maxItems: 256
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                    apiVersions:
+                      description: apiVersions are resource API versions. Omission
+                        means every version.
+                      items:
+                        type: string
+                      maxItems: 256
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                    fieldSelector:
+                      description: fieldSelector restricts collection members with
+                        parsed field requirements.
+                      properties:
+                        requirements:
+                          description: requirements are ANDed parsed field selector
+                            requirements.
+                          items:
+                            description: |-
+                              FieldSelectorRequirement is a selector that contains values, a key, and an operator that
+                              relates the key and values.
+                            properties:
+                              key:
+                                description: key is the field selector key that the
+                                  requirement applies to.
+                                type: string
+                              operator:
+                                description: |-
+                                  operator represents a key's relationship to a set of values.
+                                  Valid operators are In, NotIn, Exists, DoesNotExist.
+                                  The list of operators may grow in the future.
+                                type: string
+                              values:
+                                description: |-
+                                  values is an array of string values.
+                                  If the operator is In or NotIn, the values array must be non-empty.
+                                  If the operator is Exists or DoesNotExist, the values array must be empty.
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                            required:
+                            - key
+                            - operator
+                            type: object
+                          maxItems: 64
+                          type: array
+                          x-kubernetes-list-type: atomic
+                      type: object
+                    labelSelector:
+                      description: labelSelector restricts collection members with
+                        a native label selector.
+                      properties:
+                        matchExpressions:
+                          description: matchExpressions is a list of label selector
+                            requirements. The requirements are ANDed.
+                          items:
+                            description: |-
+                              A label selector requirement is a selector that contains values, a key, and an operator that
+                              relates the key and values.
+                            properties:
+                              key:
+                                description: key is the label key that the selector
+                                  applies to.
+                                type: string
+                              operator:
+                                description: |-
+                                  operator represents a key's relationship to a set of values.
+                                  Valid operators are In, NotIn, Exists and DoesNotExist.
+                                type: string
+                              values:
+                                description: |-
+                                  values is an array of string values. If the operator is In or NotIn,
+                                  the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                  the values array must be empty. This array is replaced during a strategic
+                                  merge patch.
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                            required:
+                            - key
+                            - operator
+                            type: object
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        matchLabels:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                            map is equivalent to an element of matchExpressions, whose key field is "key", the
+                            operator is "In", and the values array contains only "value". The requirements are ANDed.
+                          type: object
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    namespaces:
+                      description: |-
+                        namespaces restrict resource operations by request effect namespace.
+                        "*" matches every named namespace, and "" matches requests without one.
+                      items:
+                        maxLength: 63
+                        pattern: ^(\*|[a-z0-9]([-a-z0-9]*[a-z0-9])?)?$
+                        type: string
+                      maxItems: 256
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                    nonResourceURLs:
+                      description: nonResourceURLs are exact or suffix-wildcard absolute
+                        paths.
+                      items:
+                        type: string
+                      maxItems: 256
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                    resourceNames:
+                      description: resourceNames restrict resource operations to exact
+                        names.
+                      items:
+                        type: string
+                      maxItems: 256
+                      type: array
+                      x-kubernetes-list-type: set
+                    resources:
+                      description: resources are resource or resource/subresource
+                        names.
+                      items:
+                        type: string
+                      maxItems: 256
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                    verbs:
+                      description: verbs are Kubernetes resource verbs or lowercase
+                        HTTP verbs.
+                      items:
+                        type: string
+                      maxItems: 256
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                  required:
+                  - verbs
+                  type: object
+                  x-kubernetes-validations:
+                  - message: a non-resource rule forbids resource fields
+                    rule: '!has(self.nonResourceURLs) || !(has(self.apiGroups) ||
+                      has(self.resources) || has(self.apiVersions) || has(self.resourceNames)
+                      || has(self.namespaces) || has(self.labelSelector) || has(self.fieldSelector))'
+                  - message: a resource rule requires apiGroups and resources
+                    rule: has(self.nonResourceURLs) || (has(self.apiGroups) && has(self.resources))
+                  - message: the apiVersions wildcard must stand alone
+                    rule: '!has(self.apiVersions) || !(''*'' in self.apiVersions)
+                      || size(self.apiVersions) == 1'
+                  - message: selectors require only collection verbs
+                    rule: '!(has(self.labelSelector) || has(self.fieldSelector)) ||
+                      self.verbs.all(v, v in [''list'', ''watch'', ''deletecollection''])'
+                maxItems: 256
+                type: array
+                x-kubernetes-list-type: atomic
+              imports:
+                description: imports contains native Role and ClusterRole permission
+                  definitions.
+                items:
+                  description: PolicyImport identifies a native Role or ClusterRole
+                    and an optional namespace filter.
+                  properties:
+                    apiGroup:
+                      description: apiGroup is the referenced native kind's API group.
+                      maxLength: 253
+                      type: string
+                    kind:
+                      description: kind is Role or ClusterRole.
+                      enum:
+                      - Role
+                      - ClusterRole
+                      type: string
+                    name:
+                      description: name is the referenced native role name.
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                    namespace:
+                      description: |-
+                        namespace is the logical namespace of a Role. Omission means the importing
+                        document's namespace.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                    namespaces:
+                      description: |-
+                        namespaces restricts imported resource operations to matching namespaces,
+                        as an operation rule's namespaces do.
+                      items:
+                        maxLength: 63
+                        pattern: ^(\*|[a-z0-9]([-a-z0-9]*[a-z0-9])?)?$
+                        type: string
+                      maxItems: 256
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                    sourceRef:
+                      description: sourceRef selects another allowed PolicySource.
+                      properties:
+                        name:
+                          description: name is the PolicySource name.
+                          maxLength: 63
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                          type: string
+                        namespace:
+                          description: namespace is the PolicySource namespace.
+                          maxLength: 63
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                          type: string
+                      required:
+                      - name
+                      - namespace
+                      type: object
+                  required:
+                  - kind
+                  - name
+                  type: object
+                  x-kubernetes-validations:
+                  - message: apiGroup must be rbac.authorization.k8s.io
+                    rule: '!has(self.apiGroup) || self.apiGroup == ''rbac.authorization.k8s.io'''
+                  - message: namespace is forbidden for ClusterRole
+                    rule: self.kind != 'ClusterRole' || !has(self.namespace)
+                  - message: a reference into another source requires namespace
+                    rule: '!has(self.sourceRef) || has(self.namespace) || self.kind
+                      == ''ClusterRole'''
+                maxItems: 64
+                type: array
+                x-kubernetes-list-type: atomic
+              include:
+                description: |-
+                  include contains locally allowed operations. Omitted together with imports
+                  on a Policy with a condition, it allows every operation the condition
+                  allows.
+                items:
+                  description: OperationRule describes a complete resource or non-resource
+                    operation set.
+                  properties:
+                    apiGroups:
+                      description: apiGroups are the resource API groups.
+                      items:
+                        type: string
+                      maxItems: 256
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                    apiVersions:
+                      description: apiVersions are resource API versions. Omission
+                        means every version.
+                      items:
+                        type: string
+                      maxItems: 256
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                    fieldSelector:
+                      description: fieldSelector restricts collection members with
+                        parsed field requirements.
+                      properties:
+                        requirements:
+                          description: requirements are ANDed parsed field selector
+                            requirements.
+                          items:
+                            description: |-
+                              FieldSelectorRequirement is a selector that contains values, a key, and an operator that
+                              relates the key and values.
+                            properties:
+                              key:
+                                description: key is the field selector key that the
+                                  requirement applies to.
+                                type: string
+                              operator:
+                                description: |-
+                                  operator represents a key's relationship to a set of values.
+                                  Valid operators are In, NotIn, Exists, DoesNotExist.
+                                  The list of operators may grow in the future.
+                                type: string
+                              values:
+                                description: |-
+                                  values is an array of string values.
+                                  If the operator is In or NotIn, the values array must be non-empty.
+                                  If the operator is Exists or DoesNotExist, the values array must be empty.
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                            required:
+                            - key
+                            - operator
+                            type: object
+                          maxItems: 64
+                          type: array
+                          x-kubernetes-list-type: atomic
+                      type: object
+                    labelSelector:
+                      description: labelSelector restricts collection members with
+                        a native label selector.
+                      properties:
+                        matchExpressions:
+                          description: matchExpressions is a list of label selector
+                            requirements. The requirements are ANDed.
+                          items:
+                            description: |-
+                              A label selector requirement is a selector that contains values, a key, and an operator that
+                              relates the key and values.
+                            properties:
+                              key:
+                                description: key is the label key that the selector
+                                  applies to.
+                                type: string
+                              operator:
+                                description: |-
+                                  operator represents a key's relationship to a set of values.
+                                  Valid operators are In, NotIn, Exists and DoesNotExist.
+                                type: string
+                              values:
+                                description: |-
+                                  values is an array of string values. If the operator is In or NotIn,
+                                  the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                  the values array must be empty. This array is replaced during a strategic
+                                  merge patch.
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                            required:
+                            - key
+                            - operator
+                            type: object
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        matchLabels:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                            map is equivalent to an element of matchExpressions, whose key field is "key", the
+                            operator is "In", and the values array contains only "value". The requirements are ANDed.
+                          type: object
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    namespaces:
+                      description: |-
+                        namespaces restrict resource operations by request effect namespace.
+                        "*" matches every named namespace, and "" matches requests without one.
+                      items:
+                        maxLength: 63
+                        pattern: ^(\*|[a-z0-9]([-a-z0-9]*[a-z0-9])?)?$
+                        type: string
+                      maxItems: 256
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                    nonResourceURLs:
+                      description: nonResourceURLs are exact or suffix-wildcard absolute
+                        paths.
+                      items:
+                        type: string
+                      maxItems: 256
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                    resourceNames:
+                      description: resourceNames restrict resource operations to exact
+                        names.
+                      items:
+                        type: string
+                      maxItems: 256
+                      type: array
+                      x-kubernetes-list-type: set
+                    resources:
+                      description: resources are resource or resource/subresource
+                        names.
+                      items:
+                        type: string
+                      maxItems: 256
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                    verbs:
+                      description: verbs are Kubernetes resource verbs or lowercase
+                        HTTP verbs.
+                      items:
+                        type: string
+                      maxItems: 256
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                  required:
+                  - verbs
+                  type: object
+                  x-kubernetes-validations:
+                  - message: a non-resource rule forbids resource fields
+                    rule: '!has(self.nonResourceURLs) || !(has(self.apiGroups) ||
+                      has(self.resources) || has(self.apiVersions) || has(self.resourceNames)
+                      || has(self.namespaces) || has(self.labelSelector) || has(self.fieldSelector))'
+                  - message: a resource rule requires apiGroups and resources
+                    rule: has(self.nonResourceURLs) || (has(self.apiGroups) && has(self.resources))
+                  - message: the apiVersions wildcard must stand alone
+                    rule: '!has(self.apiVersions) || !(''*'' in self.apiVersions)
+                      || size(self.apiVersions) == 1'
+                  - message: selectors require only collection verbs
+                    rule: '!(has(self.labelSelector) || has(self.fieldSelector)) ||
+                      self.verbs.all(v, v in [''list'', ''watch'', ''deletecollection''])'
+                maxItems: 256
+                type: array
+                x-kubernetes-list-type: atomic
             type: object
+            x-kubernetes-validations:
+            - message: one of include, imports or condition is required
+              rule: has(self.include) || has(self.imports) || has(self.condition)
         required:
         - spec
         type: object

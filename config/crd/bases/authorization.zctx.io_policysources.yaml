@@ -8,16 +8,30 @@ metadata:
 spec:
   group: authorization.zctx.io
   names:
+    categories:
+    - authz
     kind: PolicySource
     listKind: PolicySourceList
     plural: policysources
+    shortNames:
+    - azsrc
     singular: policysource
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=="Synchronized")].status
+      name: Synchronized
+      type: string
+    - jsonPath: .status.lastAdmittedTime
+      name: LastAdmitted
+      type: date
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: PolicySource is the Schema for the policysources API
+        description: PolicySource registers an acquired policy-document source.
         properties:
           apiVersion:
             description: |-
@@ -37,22 +51,166 @@ spec:
           metadata:
             type: object
           spec:
-            description: spec defines the desired state of PolicySource
+            description: spec defines source acquisition.
+            properties:
+              collection:
+                description: collection contains the explicit ranges collected by
+                  this source.
+                items:
+                  description: |-
+                    KeyRange selects policy documents to collect from a source. Cluster-scoped
+                    kinds omit namespaces; every other kind requires them.
+                  properties:
+                    kinds:
+                      description: kinds are the canonical kinds included in the range.
+                      items:
+                        enum:
+                        - Policy
+                        - PolicyBinding
+                        - PolicySet
+                        - Role
+                        - ClusterRole
+                        - RoleBinding
+                        - ClusterRoleBinding
+                        type: string
+                      maxItems: 256
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                    names:
+                      description: |-
+                        names are the document names included in the range. "*" selects every
+                        name.
+                      items:
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                      maxItems: 256
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                    namespaces:
+                      description: |-
+                        namespaces are the logical namespaces included in the range. "*" selects
+                        every namespace.
+                      items:
+                        maxLength: 63
+                        pattern: ^(\*|[a-z0-9]([-a-z0-9]*[a-z0-9])?)$
+                        type: string
+                      maxItems: 256
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                  required:
+                  - kinds
+                  - names
+                  type: object
+                  x-kubernetes-validations:
+                  - message: kinds must be all cluster-scoped or all namespaced
+                    rule: self.kinds.all(k, k in ['ClusterRole', 'ClusterRoleBinding'])
+                      || self.kinds.all(k, !(k in ['ClusterRole', 'ClusterRoleBinding']))
+                  - message: namespaces is required for namespaced kinds and forbidden
+                      for cluster-scoped kinds
+                    rule: self.kinds.all(k, k in ['ClusterRole', 'ClusterRoleBinding'])
+                      != has(self.namespaces)
+                  - message: the namespaces wildcard must stand alone
+                    rule: '!has(self.namespaces) || !(''*'' in self.namespaces) ||
+                      size(self.namespaces) == 1'
+                  - message: the names wildcard must stand alone
+                    rule: '!(''*'' in self.names) || size(self.names) == 1'
+                maxItems: 64
+                type: array
+                x-kubernetes-list-type: atomic
+              contribution:
+                default: Active
+                description: |-
+                  contribution selects whether the source's documents take part in compiled
+                  policy. Toggling it never restarts acquisition.
+                enum:
+                - Active
+                - Inert
+                type: string
+              provider:
+                description: provider selects and configures the acquisition provider.
+                properties:
+                  kubernetes:
+                    description: kubernetes configures acquisition from a Kubernetes
+                      API.
+                    properties:
+                      kubeconfig:
+                        description: |-
+                          kubeconfig selects an explicit kubeconfig credential. Omission reads
+                          from the operator's own cluster with the operator's credentials.
+                        properties:
+                          secretRef:
+                            description: secretRef identifies the Secret data containing
+                              the kubeconfig.
+                            properties:
+                              key:
+                                description: key is the Secret data key.
+                                maxLength: 253
+                                minLength: 1
+                                pattern: ^[-._a-zA-Z0-9]+$
+                                type: string
+                              name:
+                                description: name is the Secret name.
+                                maxLength: 253
+                                minLength: 1
+                                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                                type: string
+                            required:
+                            - key
+                            - name
+                            type: object
+                        required:
+                        - secretRef
+                        type: object
+                    type: object
+                  type:
+                    description: type identifies the selected provider.
+                    enum:
+                    - Kubernetes
+                    type: string
+                required:
+                - type
+                type: object
+              rego:
+                description: |-
+                  rego allows the source's documents to carry Rego conditions. Omission
+                  forbids them, here and in every use beneath this source.
+                properties:
+                  allowedBuiltins:
+                    description: |-
+                      allowedBuiltins are the builtins conditions may call. Omission means
+                      the release's default builtins.
+                    items:
+                      maxLength: 128
+                      minLength: 1
+                      type: string
+                    maxItems: 256
+                    type: array
+                    x-kubernetes-list-type: set
+                type: object
+              synchronization:
+                default: Active
+                description: |-
+                  synchronization selects whether the source reads from its provider.
+                  Paused stops reading and keeps serving the last complete view.
+                enum:
+                - Active
+                - Paused
+                type: string
+            required:
+            - collection
+            - provider
             type: object
           status:
-            description: status defines the observed state of PolicySource
+            description: status reports observed acquisition state.
             properties:
               conditions:
                 description: |-
-                  conditions represent the current state of the PolicySource resource.
-                  Each condition has a unique type and reflects the status of a specific aspect of the resource.
-
-                  Standard condition types include:
-                  - "Available": the resource is fully functional
-                  - "Progressing": the resource is being created or updated
-                  - "Degraded": the resource failed to reach or maintain its desired state
-
-                  The status of each condition is one of True, False, or Unknown.
+                  conditions holds Synchronized, which reports whether the latest acquisition
+                  is complete.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -111,10 +269,143 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              issues:
+                description: |-
+                  issues contains bounded attributed diagnostics for the documents
+                  in the source's view.
+                items:
+                  description: Issue is a bounded diagnostic projected into control-resource
+                    status.
+                  properties:
+                    authority:
+                      description: authority identifies an affected authority when
+                        known.
+                      type: string
+                    contextID:
+                      description: contextID identifies one contextual graph use when
+                        known.
+                      type: string
+                    documentRef:
+                      description: documentRef identifies an affected document when
+                        known.
+                      properties:
+                        group:
+                          description: group is the canonical API group.
+                          type: string
+                        kind:
+                          description: kind is the canonical kind.
+                          type: string
+                        name:
+                          description: name is the document name.
+                          type: string
+                        namespace:
+                          description: namespace is present for namespaced document
+                            kinds.
+                          type: string
+                      required:
+                      - group
+                      - kind
+                      - name
+                      type: object
+                    endpoint:
+                      description: endpoint identifies an affected endpoint when known.
+                      type: string
+                    message:
+                      description: message is a human-readable diagnostic.
+                      type: string
+                    path:
+                      description: path is the ordered qualified ancestry for a contextual
+                        use.
+                      items:
+                        description: QualifiedDocumentRef identifies a document in
+                          status diagnostics.
+                        properties:
+                          group:
+                            description: group is the canonical API group.
+                            type: string
+                          kind:
+                            description: kind is the canonical kind.
+                            type: string
+                          name:
+                            description: name is the document name.
+                            type: string
+                          namespace:
+                            description: namespace is present for namespaced document
+                              kinds.
+                            type: string
+                        required:
+                        - group
+                        - kind
+                        - name
+                        type: object
+                      type: array
+                      x-kubernetes-list-type: atomic
+                    reason:
+                      description: reason is a stable machine-readable reason.
+                      type: string
+                    scope:
+                      description: scope identifies the diagnostic attribution level.
+                      enum:
+                      - Document
+                      - Use
+                      type: string
+                    severity:
+                      description: severity is Error or Warning.
+                      enum:
+                      - Error
+                      - Warning
+                      type: string
+                    sourceRef:
+                      description: sourceRef identifies the source of the affected
+                        document when known.
+                      properties:
+                        name:
+                          description: name is the PolicySource name.
+                          maxLength: 63
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                          type: string
+                        namespace:
+                          description: namespace is the PolicySource namespace.
+                          maxLength: 63
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                          type: string
+                      required:
+                      - name
+                      - namespace
+                      type: object
+                  required:
+                  - message
+                  - reason
+                  - scope
+                  - severity
+                  type: object
+                maxItems: 128
+                type: array
+                x-kubernetes-list-type: atomic
+              issuesTruncated:
+                description: issuesTruncated reports that additional diagnostics were
+                  omitted.
+                type: boolean
+              lastAdmittedTime:
+                description: |-
+                  lastAdmittedTime records when the source last admitted a complete view
+                  whose documents changed, or which ended a period of failed acquisition.
+                format: date-time
+                type: string
+              observedGeneration:
+                description: observedGeneration is the spec generation assessed by
+                  this status.
+                format: int64
+                type: integer
             type: object
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: name must be at most 63 characters
+          rule: size(self.metadata.name) <= 63
     served: true
     storage: true
     subresources:

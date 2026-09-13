@@ -22,22 +22,18 @@ resources:
 # default, aiding admins in cluster management. Those roles are
 # not used by the k8s-authz itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
-- delegation_admin_role.yaml
-- delegation_editor_role.yaml
-- delegation_viewer_role.yaml
-- policyset_admin_role.yaml
-- policyset_editor_role.yaml
-- policyset_viewer_role.yaml
-- policybinding_admin_role.yaml
-- policybinding_editor_role.yaml
-- policybinding_viewer_role.yaml
-- policy_admin_role.yaml
-- policy_editor_role.yaml
-- policy_viewer_role.yaml
 - authorizationservice_admin_role.yaml
 - authorizationservice_editor_role.yaml
 - authorizationservice_viewer_role.yaml
+- policy_admin_role.yaml
+- policy_editor_role.yaml
+- policy_viewer_role.yaml
+- policybinding_admin_role.yaml
+- policybinding_editor_role.yaml
+- policybinding_viewer_role.yaml
+- policyset_admin_role.yaml
+- policyset_editor_role.yaml
+- policyset_viewer_role.yaml
 - policysource_admin_role.yaml
 - policysource_editor_role.yaml
 - policysource_viewer_role.yaml
-

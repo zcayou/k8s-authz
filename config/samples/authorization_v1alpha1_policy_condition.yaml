@@ -1,0 +1,26 @@
+apiVersion: authorization.zctx.io/v1alpha1
+kind: Policy
+metadata:
+  labels:
+    app.kubernetes.io/name: k8s-authz
+    app.kubernetes.io/managed-by: kustomize
+  namespace: k8s-authz-system
+  name: team-namespace-writes
+spec:
+  include:
+    - apiGroups:
+        - apps
+      resources:
+        - deployments
+      verbs:
+        - create
+        - update
+        - patch
+        - delete
+  condition:
+    rego: |
+      package condition
+
+      allow if {
+        input.request.resourceAttributes.namespace == concat("-", ["team", input.principal.user])
+      }

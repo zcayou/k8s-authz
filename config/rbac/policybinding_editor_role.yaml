@@ -25,3 +25,9 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - authorization.zctx.io
+  resources:
+  - policybindings/status
+  verbs:
+  - get

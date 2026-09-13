@@ -21,30 +21,40 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+// PolicySetSpec assembles bindings and root prohibitions.
+type PolicySetSpec struct {
+	// bindingRefs contains custom or native bindings that contribute Allow.
+	// +optional
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=256
+	BindingRefs []BindingRef `json:"bindingRefs,omitempty"`
 
-// PolicySetSpec defines the desired state of PolicySet
-type PolicySetSpec struct{}
+	// prohibitionRefs contains custom or native bindings that contribute root-only Deny.
+	// +optional
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=256
+	ProhibitionRefs []BindingRef `json:"prohibitionRefs,omitempty"`
+}
 
 // +kubebuilder:object:root=true
+// +kubebuilder:resource:scope=Namespaced,shortName=azps,categories=authz
 
-// PolicySet is the Schema for the policysets API
+// PolicySet assembles binding references for contextual evaluation.
 type PolicySet struct {
 	metav1.TypeMeta `json:",inline"`
 
-	// metadata is a standard object metadata
+	// metadata is standard object metadata.
 	// +optional
 	metav1.ObjectMeta `json:"metadata,omitzero"`
 
-	// spec defines the desired state of PolicySet
+	// spec defines the policy graph entry.
 	// +required
 	Spec PolicySetSpec `json:"spec"`
 }
 
 // +kubebuilder:object:root=true
 
-// PolicySetList contains a list of PolicySet
+// PolicySetList contains a list of PolicySet objects.
 type PolicySetList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitzero"`

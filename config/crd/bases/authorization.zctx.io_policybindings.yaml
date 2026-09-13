@@ -8,16 +8,21 @@ metadata:
 spec:
   group: authorization.zctx.io
   names:
+    categories:
+    - authz
     kind: PolicyBinding
     listKind: PolicyBindingList
     plural: policybindings
+    shortNames:
+    - azpb
     singular: policybinding
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: PolicyBinding is the Schema for the policybindings API
+        description: PolicyBinding attaches principals to a Policy, PolicySet, or
+          native role definition.
         properties:
           apiVersion:
             description: |-
@@ -37,8 +42,326 @@ spec:
           metadata:
             type: object
           spec:
-            description: spec defines the desired state of PolicyBinding
+            description: spec defines the principal binding.
+            properties:
+              constraints:
+                description: constraints narrows the target and its descendants.
+                properties:
+                  maxDepth:
+                    description: maxDepth caps further PolicySet edges below the target.
+                    format: int32
+                    maximum: 64
+                    minimum: 0
+                    type: integer
+                  policyRef:
+                    description: policyRef supplies a leaf permission bound.
+                    properties:
+                      apiGroup:
+                        description: |-
+                          apiGroup is the referenced kind's API group. It is derived from kind when
+                          omitted.
+                        maxLength: 253
+                        type: string
+                      kind:
+                        description: kind is Policy, PolicySet, Role, or ClusterRole.
+                          Omission means Policy.
+                        enum:
+                        - Policy
+                        - PolicySet
+                        - Role
+                        - ClusterRole
+                        type: string
+                      name:
+                        description: name is the referenced permission definition's
+                          name.
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                      namespace:
+                        description: |-
+                          namespace is the logical namespace of a namespaced definition. Omission
+                          means the referencing document's namespace.
+                        maxLength: 63
+                        minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                        type: string
+                      sourceRef:
+                        description: sourceRef selects another allowed PolicySource.
+                        properties:
+                          name:
+                            description: name is the PolicySource name.
+                            maxLength: 63
+                            minLength: 1
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                            type: string
+                          namespace:
+                            description: namespace is the PolicySource namespace.
+                            maxLength: 63
+                            minLength: 1
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                            type: string
+                        required:
+                        - name
+                        - namespace
+                        type: object
+                    required:
+                    - name
+                    type: object
+                    x-kubernetes-validations:
+                    - message: apiGroup must match kind
+                      rule: '!has(self.apiGroup) || self.apiGroup == (has(self.kind)
+                        && self.kind in [''Role'', ''ClusterRole''] ? ''rbac.authorization.k8s.io''
+                        : ''authorization.zctx.io'')'
+                    - message: namespace is forbidden for ClusterRole
+                      rule: '!(has(self.kind) && self.kind == ''ClusterRole'') ||
+                        !has(self.namespace)'
+                    - message: a reference into another source requires namespace
+                      rule: '!has(self.sourceRef) || has(self.namespace) || (has(self.kind)
+                        && self.kind == ''ClusterRole'')'
+                  sourceRefs:
+                    description: |-
+                      sourceRefs narrows the incoming sources for a PolicySet target. It must
+                      include the target's own source.
+                    items:
+                      description: SourceRef identifies a PolicySource in the trusted
+                        control API.
+                      properties:
+                        name:
+                          description: name is the PolicySource name.
+                          maxLength: 63
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                          type: string
+                        namespace:
+                          description: namespace is the PolicySource namespace.
+                          maxLength: 63
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                          type: string
+                      required:
+                      - name
+                      - namespace
+                      type: object
+                    maxItems: 64
+                    minItems: 1
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - namespace
+                    - name
+                    x-kubernetes-list-type: map
+                type: object
+                x-kubernetes-validations:
+                - message: constraints.policyRef must target a leaf policy
+                  rule: '!has(self.policyRef) || !has(self.policyRef.kind) || self.policyRef.kind
+                    != ''PolicySet'''
+              policyRef:
+                description: policyRef identifies the permission definition.
+                properties:
+                  apiGroup:
+                    description: |-
+                      apiGroup is the referenced kind's API group. It is derived from kind when
+                      omitted.
+                    maxLength: 253
+                    type: string
+                  kind:
+                    description: kind is Policy, PolicySet, Role, or ClusterRole.
+                      Omission means Policy.
+                    enum:
+                    - Policy
+                    - PolicySet
+                    - Role
+                    - ClusterRole
+                    type: string
+                  name:
+                    description: name is the referenced permission definition's name.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  namespace:
+                    description: |-
+                      namespace is the logical namespace of a namespaced definition. Omission
+                      means the referencing document's namespace.
+                    maxLength: 63
+                    minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  sourceRef:
+                    description: sourceRef selects another allowed PolicySource.
+                    properties:
+                      name:
+                        description: name is the PolicySource name.
+                        maxLength: 63
+                        minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                        type: string
+                      namespace:
+                        description: namespace is the PolicySource namespace.
+                        maxLength: 63
+                        minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                        type: string
+                    required:
+                    - name
+                    - namespace
+                    type: object
+                required:
+                - name
+                type: object
+                x-kubernetes-validations:
+                - message: apiGroup must match kind
+                  rule: '!has(self.apiGroup) || self.apiGroup == (has(self.kind) &&
+                    self.kind in [''Role'', ''ClusterRole''] ? ''rbac.authorization.k8s.io''
+                    : ''authorization.zctx.io'')'
+                - message: namespace is forbidden for ClusterRole
+                  rule: '!(has(self.kind) && self.kind == ''ClusterRole'') || !has(self.namespace)'
+                - message: a reference into another source requires namespace
+                  rule: '!has(self.sourceRef) || has(self.namespace) || (has(self.kind)
+                    && self.kind == ''ClusterRole'')'
+              subjectMatch:
+                description: subjectMatch selects principals with extended fixed-form
+                  predicates.
+                properties:
+                  requirements:
+                    description: requirements are ANDed principal predicates.
+                    items:
+                      description: SubjectRequirement tests one principal attribute.
+                        Requirements are ANDed.
+                      properties:
+                        key:
+                          description: key is required only for Extra.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                        kind:
+                          description: kind selects the principal attribute.
+                          enum:
+                          - User
+                          - Group
+                          - ServiceAccount
+                          - UID
+                          - Extra
+                          type: string
+                        names:
+                          description: names supplies operands for User, Group, or
+                            ServiceAccount.
+                          items:
+                            minLength: 1
+                            type: string
+                          maxItems: 256
+                          minItems: 1
+                          type: array
+                          x-kubernetes-list-type: set
+                        namespace:
+                          description: namespace is required only for ServiceAccount.
+                          maxLength: 63
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                          type: string
+                        operator:
+                          description: operator compares the selected values or tests
+                            presence.
+                          enum:
+                          - In
+                          - NotIn
+                          - Exists
+                          - DoesNotExist
+                          - StartsWith
+                          - NotStartsWith
+                          type: string
+                        values:
+                          description: values supplies operands for UID or Extra.
+                          items:
+                            type: string
+                          maxItems: 256
+                          minItems: 1
+                          type: array
+                          x-kubernetes-list-type: set
+                      required:
+                      - kind
+                      - operator
+                      type: object
+                      x-kubernetes-validations:
+                      - message: namespace is required only for ServiceAccount
+                        rule: 'self.kind == ''ServiceAccount'' ? has(self.namespace)
+                          : !has(self.namespace)'
+                      - message: key is required only for Extra
+                        rule: 'self.kind == ''Extra'' ? has(self.key) : !has(self.key)'
+                      - message: identity requirements use names and attributes use
+                          values
+                        rule: 'self.kind in [''User'', ''Group'', ''ServiceAccount'']
+                          ? !has(self.values) : !has(self.names)'
+                      - message: prefix operators require identity names
+                        rule: '!(self.operator in [''StartsWith'', ''NotStartsWith''])
+                          || self.kind in [''User'', ''Group'', ''ServiceAccount'']'
+                      - message: presence operators forbid operands and the other
+                          operators require them
+                        rule: 'self.operator in [''Exists'', ''DoesNotExist''] ? !has(self.names)
+                          && !has(self.values) : has(self.names) || has(self.values)'
+                      - message: UID values must not be empty
+                        rule: self.kind != 'UID' || !has(self.values) || self.values.all(v,
+                          size(v) > 0)
+                    maxItems: 64
+                    type: array
+                    x-kubernetes-list-type: atomic
+                type: object
+              subjects:
+                description: subjects contains exact principals combined by OR.
+                items:
+                  description: |-
+                    Subject contains a reference to the object or user identities a role binding applies to.  This can either hold a direct API object reference,
+                    or a value for non-objects such as user and group names.
+                  properties:
+                    apiGroup:
+                      description: |-
+                        apiGroup holds the API group of the referenced subject.
+                        Defaults to "" for ServiceAccount subjects.
+                        Defaults to "rbac.authorization.k8s.io" for User and Group subjects.
+                      type: string
+                    kind:
+                      description: |-
+                        kind of object being referenced. Values defined by this API group are "User", "Group", and "ServiceAccount".
+                        If the Authorizer does not recognized the kind value, the Authorizer should report an error.
+                      type: string
+                    name:
+                      description: name of the object being referenced.
+                      type: string
+                    namespace:
+                      description: |-
+                        namespace of the referenced object.  If the object kind is non-namespace, such as "User" or "Group", and this value is not empty
+                        the Authorizer should report an error.
+                      type: string
+                  required:
+                  - kind
+                  - name
+                  type: object
+                  x-kubernetes-map-type: atomic
+                maxItems: 256
+                minItems: 1
+                type: array
+                x-kubernetes-list-type: atomic
+                x-kubernetes-validations:
+                - message: subject kind must be User, Group, or ServiceAccount
+                  rule: self.all(s, s.kind in ['User', 'Group', 'ServiceAccount'])
+                - message: subject name must not be empty
+                  rule: self.all(s, size(s.name) > 0)
+                - message: a ServiceAccount subject requires namespace and no apiGroup;
+                    User and Group subjects forbid namespace and use the rbac.authorization.k8s.io
+                    apiGroup
+                  rule: 'self.all(s, s.kind == ''ServiceAccount'' ? (has(s.namespace)
+                    && size(s.namespace) > 0 && (!has(s.apiGroup) || s.apiGroup ==
+                    '''')) : (!has(s.namespace) || s.namespace == '''') && (!has(s.apiGroup)
+                    || s.apiGroup == ''rbac.authorization.k8s.io''))'
+            required:
+            - policyRef
             type: object
+            x-kubernetes-validations:
+            - message: exactly one of subjects or subjectMatch is required
+              rule: has(self.subjects) != has(self.subjectMatch)
+            - message: constraints.sourceRefs and constraints.maxDepth require a PolicySet
+                target
+              rule: '!has(self.constraints) || !(has(self.constraints.sourceRefs)
+                || has(self.constraints.maxDepth)) || (has(self.policyRef.kind) &&
+                self.policyRef.kind == ''PolicySet'')'
         required:
         - spec
         type: object

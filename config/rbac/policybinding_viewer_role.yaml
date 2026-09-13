@@ -21,3 +21,9 @@ rules:
   - get
   - list
   - watch
+- apiGroups:
+  - authorization.zctx.io
+  resources:
+  - policybindings/status
+  verbs:
+  - get
