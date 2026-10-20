@@ -29,17 +29,19 @@ var listKinds = map[schema.GroupVersionResource]string{
 	{Group: rbacv1.GroupName, Version: "v1", Resource: "clusterroles"}:                    "ClusterRoleList",
 	{Group: rbacv1.GroupName, Version: "v1", Resource: "clusterrolebindings"}:             "ClusterRoleBindingList",
 	{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}: "CustomResourceDefinitionList",
+	{Version: "v1", Resource: "namespaces"}:                                               "NamespaceList",
 }
 
 func fakeClient(objects ...runtime.Object) *dynamicfake.FakeDynamicClient {
 	return dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds, objects...)
 }
 
-// policyCRD returns the Policy CRD, serving this API version when served.
-func policyCRD(served bool) *unstructured.Unstructured {
+// documentCRD returns the CRD of a document resource, serving this API version
+// when served.
+func documentCRD(resource string, served bool) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "apiextensions.k8s.io/v1", "kind": "CustomResourceDefinition",
-		"metadata": map[string]any{"name": "policies." + api.GroupVersion.Group},
+		"metadata": map[string]any{"name": resource + "." + api.GroupVersion.Group},
 		"spec":     map[string]any{"versions": []any{map[string]any{"name": api.GroupVersion.Version, "served": served}}},
 	}}
 }
@@ -79,4 +81,24 @@ func run(ctx context.Context, reader *kubernetes.Reader) <-chan model.SourceObse
 
 func collection(kinds []string, namespaces []string, names ...string) api.KeyRange {
 	return api.KeyRange{Kinds: kinds, Namespaces: namespaces, Names: names}
+}
+
+// collects is the collection of ranges, without namespace labels.
+func collects(ranges ...api.KeyRange) kubernetes.Collection {
+	return kubernetes.Collection{Ranges: ranges}
+}
+
+func namespace(name string, labels map[string]any) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1", "kind": "Namespace",
+		"metadata": map[string]any{"name": name, "uid": name + "-uid", "labels": labels},
+	}}
+}
+
+func policySet(name string, labels map[string]any) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": api.GroupVersion.String(), "kind": model.KindPolicySet,
+		"metadata": map[string]any{"namespace": teamNamespace, "name": name, "uid": name + "-uid", "labels": labels},
+		"spec":     map[string]any{},
+	}}
 }

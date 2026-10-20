@@ -361,6 +361,8 @@ var schemaYAML = typed.YAMLObject(`types:
     - name: kubeconfig
       type:
         namedType: com.github.zcayou.k8s-authz.api.v1alpha1.KubeconfigReference
+- name: com.github.zcayou.k8s-authz.api.v1alpha1.NamespaceLabels
+  scalar: string
 - name: com.github.zcayou.k8s-authz.api.v1alpha1.OperationRule
   map:
     fields:
@@ -557,6 +559,9 @@ var schemaYAML = typed.YAMLObject(`types:
     - name: policyRef
       type:
         namedType: com.github.zcayou.k8s-authz.api.v1alpha1.PolicyRef
+    - name: policySelector
+      type:
+        namedType: com.github.zcayou.k8s-authz.api.v1alpha1.PolicySelector
     - name: subjectMatch
       type:
         namedType: com.github.zcayou.k8s-authz.api.v1alpha1.SubjectMatch
@@ -611,6 +616,18 @@ var schemaYAML = typed.YAMLObject(`types:
     - name: namespace
       type:
         scalar: string
+    - name: sourceRef
+      type:
+        namedType: com.github.zcayou.k8s-authz.api.v1alpha1.SourceRef
+- name: com.github.zcayou.k8s-authz.api.v1alpha1.PolicySelector
+  map:
+    fields:
+    - name: namespaceSelector
+      type:
+        namedType: io.k8s.apimachinery.pkg.apis.meta.v1.LabelSelector
+    - name: selector
+      type:
+        namedType: io.k8s.apimachinery.pkg.apis.meta.v1.LabelSelector
     - name: sourceRef
       type:
         namedType: com.github.zcayou.k8s-authz.api.v1alpha1.SourceRef
@@ -693,6 +710,10 @@ var schemaYAML = typed.YAMLObject(`types:
       type:
         namedType: com.github.zcayou.k8s-authz.api.v1alpha1.Contribution
       default: Active
+    - name: namespaceLabels
+      type:
+        namedType: com.github.zcayou.k8s-authz.api.v1alpha1.NamespaceLabels
+      default: Ignore
     - name: provider
       type:
         namedType: com.github.zcayou.k8s-authz.api.v1alpha1.PolicySourceProvider

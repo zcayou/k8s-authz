@@ -21,13 +21,20 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
-// PolicyBindingSpec attaches principals to one policy target.
+// PolicyBindingSpec attaches principals to one policy target, or to each
+// PolicySet a selector matches.
 // +kubebuilder:validation:XValidation:rule="has(self.subjects) != has(self.subjectMatch)",message="exactly one of subjects or subjectMatch is required"
-// +kubebuilder:validation:XValidation:rule="!has(self.constraints) || !(has(self.constraints.sourceRefs) || has(self.constraints.maxDepth)) || (has(self.policyRef.kind) && self.policyRef.kind == 'PolicySet')",message="constraints.sourceRefs and constraints.maxDepth require a PolicySet target"
+// +kubebuilder:validation:XValidation:rule="has(self.policyRef) != has(self.policySelector)",message="exactly one of policyRef or policySelector is required"
+// +kubebuilder:validation:XValidation:rule="!has(self.constraints) || !(has(self.constraints.sourceRefs) || has(self.constraints.maxDepth)) || has(self.policySelector) || (has(self.policyRef) && has(self.policyRef.kind) && self.policyRef.kind == 'PolicySet')",message="constraints.sourceRefs and constraints.maxDepth require a PolicySet target or a policySelector"
 type PolicyBindingSpec struct {
 	// policyRef identifies the permission definition.
-	// +required
-	PolicyRef PolicyRef `json:"policyRef"`
+	// +optional
+	PolicyRef *PolicyRef `json:"policyRef,omitempty"`
+
+	// policySelector selects PolicySets by their labels and their namespaces'
+	// labels. Each match is delegated to as a policyRef to it would be.
+	// +optional
+	PolicySelector *PolicySelector `json:"policySelector,omitempty"`
 
 	// subjects contains exact principals combined by OR.
 	// +optional
@@ -46,6 +53,24 @@ type PolicyBindingSpec struct {
 	// constraints narrows the target and its descendants.
 	// +optional
 	Constraints *BindingConstraints `json:"constraints,omitempty"`
+}
+
+// PolicySelector selects the PolicySets of one source.
+type PolicySelector struct {
+	// sourceRef selects another allowed PolicySource. Omission means the binding's
+	// own source.
+	// +optional
+	SourceRef *SourceRef `json:"sourceRef,omitempty"`
+
+	// namespaceSelector selects the namespaces whose PolicySets may match,
+	// by the namespaces' labels in the source. An empty selector selects every
+	// namespace; any other requires the source to collect namespace labels.
+	// +required
+	NamespaceSelector metav1.LabelSelector `json:"namespaceSelector"`
+
+	// selector selects PolicySets by their own labels.
+	// +required
+	Selector metav1.LabelSelector `json:"selector"`
 }
 
 // SubjectMatch selects the principals that satisfy every requirement. Like

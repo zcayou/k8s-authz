@@ -183,19 +183,39 @@ func (f *FakeEngines) Targets() []engineclient.Target {
 	return slices.Clone(f.targets)
 }
 
+// Coverage is a collection a spec describes. Documents covers every document
+// when nil, and Namespaces, whose labels it reads, none.
+type Coverage struct {
+	Documents  func(model.Reference) bool
+	Namespaces func(string) bool
+}
+
+// Collects reports whether the collection covers reference.
+func (c Coverage) Collects(reference model.Reference) bool {
+	return c.Documents == nil || c.Documents(reference)
+}
+
+// CollectsNamespaceLabels reports whether the collection reads namespace
+// labels.
+func (c Coverage) CollectsNamespaceLabels() bool {
+	return c.Namespaces != nil
+}
+
+// CollectsNamespace reports whether the collection reads namespace's labels.
+func (c Coverage) CollectsNamespace(namespace string) bool {
+	return c.Namespaces != nil && c.Namespaces(namespace)
+}
+
 // FakeReader is a source reader a spec drives. Once it runs, it hands
 // the spec its emit function through Emitters, and it runs until its context
 // ends.
 type FakeReader struct {
-	collects func(model.Reference) bool
 	emitters chan func(model.SourceObservation)
 	stopped  chan struct{}
 }
 
-// NewFakeReader returns a reader whose collection is what collects reports,
-// or everything when collects is nil.
-func NewFakeReader(collects func(model.Reference) bool) *FakeReader {
-	return &FakeReader{collects: collects, emitters: make(chan func(model.SourceObservation), 1), stopped: make(chan struct{})}
+func NewFakeReader() *FakeReader {
+	return &FakeReader{emitters: make(chan func(model.SourceObservation), 1), stopped: make(chan struct{})}
 }
 
 // Run hands emit to the spec and waits for ctx to end.
@@ -203,11 +223,6 @@ func (r *FakeReader) Run(ctx context.Context, emit func(model.SourceObservation)
 	defer close(r.stopped)
 	r.emitters <- emit
 	<-ctx.Done()
-}
-
-// Collects reports whether the reader's collection covers reference.
-func (r *FakeReader) Collects(reference model.Reference) bool {
-	return r.collects == nil || r.collects(reference)
 }
 
 // Emitters delivers the reader's emit function once it runs.

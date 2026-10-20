@@ -5,7 +5,9 @@ import (
 	"slices"
 
 	rbacv1 "k8s.io/api/rbac/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	metav1validation "k8s.io/apimachinery/pkg/apis/meta/v1/validation"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
@@ -33,6 +35,9 @@ func decodeState(source model.SourceInstance, object *unstructured.Unstructured,
 	gvk := object.GroupVersionKind()
 	key := model.DocumentKey{Source: source, Group: gvk.Group, Kind: gvk.Kind, Namespace: object.GetNamespace(), Name: object.GetName()}
 	state := model.DocumentState{Key: key, UID: string(object.GetUID())}
+	if gvk == api.GroupVersion.WithKind(model.KindPolicySet) {
+		state.Labels = object.GetLabels()
+	}
 	document, warnings, errs := decodeDocument(key, object, strict)
 	if len(errs) == 0 {
 		state.Document, state.Issues = &document, warnings
@@ -145,8 +150,18 @@ func universalEnvelope(input api.PolicySpec) bool {
 }
 
 func binding(input api.PolicyBindingSpec, key model.DocumentKey) (*model.Binding, field.ErrorList) {
-	result := &model.Binding{Policy: policyRef(input.PolicyRef, key)}
+	result := &model.Binding{}
 	var errs field.ErrorList
+	var target model.SourceKey
+	targetField := "policyRef target"
+	switch {
+	case input.PolicySelector != nil:
+		result.Selection, errs = selection(*input.PolicySelector, key)
+		target, targetField = result.Selection.Source, "policySelector"
+	case input.PolicyRef != nil:
+		result.Policy = policyRef(*input.PolicyRef, key)
+		target = result.Policy.Source
+	}
 	matcher, err := principal(input.Subjects, input.SubjectMatch)
 	if err != nil {
 		location := specPath.Child("subjects")
@@ -167,13 +182,52 @@ func binding(input api.PolicyBindingSpec, key model.DocumentKey) (*model.Binding
 			for _, source := range constraints.SourceRefs {
 				result.Sources = append(result.Sources, sourceKey(source))
 			}
-			if !slices.Contains(result.Sources, result.Policy.Source) {
-				errs = append(errs, field.Invalid(specPath.Child("constraints", "sourceRefs"), field.OmitValueType{}, "must include the policyRef target's source"))
+			if !slices.Contains(result.Sources, target) {
+				errs = append(errs, field.Invalid(specPath.Child("constraints", "sourceRefs"), field.OmitValueType{}, "must include the "+targetField+"'s source"))
 			}
 			sortCanonical(result.Sources)
 		}
 	}
 	return result, errs
+}
+
+// selection resolves a policySelector relative to the selecting document:
+// its source unless one is named.
+func selection(input api.PolicySelector, key model.DocumentKey) (*model.Selection, field.ErrorList) {
+	path := specPath.Child("policySelector")
+	result := &model.Selection{Source: key.Source.Key}
+	if input.SourceRef != nil {
+		result.Source = sourceKey(*input.SourceRef)
+	}
+	namespaces, errs := labelSelector(input.NamespaceSelector, path.Child("namespaceSelector"))
+	sets, setErrs := labelSelector(input.Selector, path.Child("selector"))
+	result.Namespaces, result.Sets = namespaces, sets
+	return result, append(errs, setErrs...)
+}
+
+// labelSelector validates a label selector as the API server validates
+// a native one, and normalizes it. Like an operation rule's labelSelector,
+// it holds at most 64 requirements.
+func labelSelector(input metav1.LabelSelector, path *field.Path) (model.LabelSelector, field.ErrorList) {
+	errs := metav1validation.ValidateLabelSelector(&input, metav1validation.LabelSelectorValidationOptions{}, path)
+	if count := len(input.MatchLabels) + len(input.MatchExpressions); count > 64 {
+		errs = append(errs, field.TooMany(path, count, 64))
+	}
+	if len(errs) != 0 {
+		return nil, errs
+	}
+	var result model.LabelSelector
+	for key, value := range input.MatchLabels {
+		result = append(result, metav1.LabelSelectorRequirement{Key: key, Operator: metav1.LabelSelectorOpIn, Values: []string{value}})
+	}
+	for _, requirement := range input.MatchExpressions {
+		requirement.Values = slices.Compact(slices.Sorted(slices.Values(requirement.Values)))
+		result = append(result, requirement)
+	}
+	sortCanonical(result)
+	return slices.CompactFunc(result, func(a, b metav1.LabelSelectorRequirement) bool {
+		return a.Key == b.Key && a.Operator == b.Operator && slices.Equal(a.Values, b.Values)
+	}), nil
 }
 
 // policyWarnings lints rules whose namespace scope behaves differently than

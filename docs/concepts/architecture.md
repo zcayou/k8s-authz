@@ -62,7 +62,7 @@ The response's `reason` field records how the decision was reached, for example 
 
 ## How policy reaches the engines
 
-1. A `PolicySource` registers an API and a collection. Every operator replica starts a filtered, credential-scoped reader for it and keeps the last complete view of its documents.
+1. A `PolicySource` registers an API and a collection. Every operator replica starts a filtered, credential-scoped reader for it and keeps the last complete view of its documents, and of its namespaces' labels when it collects them.
 2. When a source's view changes, the leader recompiles every `AuthorizationService` whose endpoints read that source. The result is one content-addressed state document per service, identified by a `sha256:` revision.
 3. The leader pushes the state directly to each engine pod over mutual TLS, presenting the operator's management certificate. It pushes only to pods that don't already serve that revision.
 4. An engine becomes Ready once it serves state compiled for its own service. A new or restarted engine stays unready until the leader pushes to it.

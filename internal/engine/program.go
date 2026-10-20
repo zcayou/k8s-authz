@@ -35,8 +35,9 @@ func Prepare(service model.ServiceUID, config model.ServiceConfig, sources map[m
 }
 
 // Cache holds one Program per service and reuses it while the service's UID,
-// its configuration and the documents its compilation read are unchanged. It's
-// safe for concurrent use. Callers must not modify a returned Program.
+// its configuration, the documents its compilation read and the outcomes
+// of the selections it evaluated are unchanged. It's safe for concurrent use.
+// Callers must not modify a returned Program.
 type Cache struct {
 	mu      sync.Mutex
 	entries map[serviceName]cachedProgram
@@ -50,6 +51,7 @@ type cachedProgram struct {
 	uid        model.ServiceUID
 	config     string
 	references []model.Reference
+	selections []model.Selection
 	inputs     string
 	program    Program
 }
@@ -59,10 +61,10 @@ func NewCache() *Cache {
 }
 
 // Prepare returns the Program of service's configuration, reusing the cached
-// one when only documents its compilation didn't read changed. It records
-// the duration and outcome of each compilation it runs in the operator's
-// metrics. A service recreated under the same name never reuses the program
-// of its former incarnation.
+// one when only documents its compilation didn't read changed, and no selection
+// it evaluated has another outcome. It records the duration and outcome of each
+// compilation it runs in the operator's metrics. A service recreated under
+// the same name never reuses the program of its former incarnation.
 func (c *Cache) Prepare(service model.Identity, config model.ServiceConfig, sources map[model.SourceKey]model.SourceObservation) (Program, error) {
 	key := serviceName{service.Namespace, service.Name}
 	uid := model.ServiceUID(service.UID)
@@ -70,7 +72,7 @@ func (c *Cache) Prepare(service model.Identity, config model.ServiceConfig, sour
 	c.mu.Lock()
 	cached, found := c.entries[key]
 	c.mu.Unlock()
-	if found && cached.uid == uid && cached.config == configDigest && compilationInputs(sources, cached.references) == cached.inputs {
+	if found && cached.uid == uid && cached.config == configDigest && compilationInputs(sources, cached.references, cached.selections, cached.program.Compilation.Limits) == cached.inputs {
 		return cached.program, nil
 	}
 	started := time.Now()
@@ -81,10 +83,11 @@ func (c *Cache) Prepare(service model.Identity, config model.ServiceConfig, sour
 	}
 	references := slices.Collect(maps.Keys(program.Compilation.References))
 	model.SortReferences(references)
-	inputs := compilationInputs(sources, references)
+	selections := program.Compilation.Selections
+	inputs := compilationInputs(sources, references, selections, program.Compilation.Limits)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.entries[key] = cachedProgram{uid: uid, config: configDigest, references: references, inputs: inputs, program: program}
+	c.entries[key] = cachedProgram{uid: uid, config: configDigest, references: references, selections: selections, inputs: inputs, program: program}
 	return program, nil
 }
 
@@ -109,10 +112,19 @@ type documentInput struct {
 	AllowedBuiltins *model.BuiltinSet `json:"allowedBuiltins"`
 }
 
-// compilationInputs digests what a compilation read of each reference: its
-// source's incarnation and allowed builtins, and its failure or the document's
-// state.
-func compilationInputs(sources map[model.SourceKey]model.SourceObservation, references []model.Reference) string {
+type selectionInput struct {
+	Selection model.Selection   `json:"selection"`
+	Selected  compiler.Selected `json:"selected"`
+}
+
+// compilationInputs digests what a compilation under limits read of each
+// reference: its source's incarnation and allowed builtins, and its failure
+// or the document's state; and the outcome of each selection.
+func compilationInputs(sources map[model.SourceKey]model.SourceObservation, references []model.Reference, selections []model.Selection, limits compiler.Limits) string {
+	outcomes := make([]selectionInput, 0, len(selections))
+	for _, selection := range selections {
+		outcomes = append(outcomes, selectionInput{Selection: selection, Selected: compiler.Select(selection, sources, limits.MaxSelectionMatches)})
+	}
 	inputs := make([]documentInput, 0, len(references))
 	for _, reference := range references {
 		source, registered := sources[reference.Source]
@@ -122,5 +134,8 @@ func compilationInputs(sources map[model.SourceKey]model.SourceObservation, refe
 			Present: found, UID: state.UID, Digest: state.Digest, AllowedBuiltins: source.AllowedBuiltins,
 		})
 	}
-	return model.Digest(inputs)
+	return model.Digest(struct {
+		Documents  []documentInput  `json:"documents"`
+		Selections []selectionInput `json:"selections"`
+	}{inputs, outcomes})
 }

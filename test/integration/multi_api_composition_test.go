@@ -99,7 +99,7 @@ func installRemotePolicyGraph(ctx context.Context, control client.Client) {
 	Expect(control.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "remote-policy"}})).To(Succeed())
 	Expect(control.Create(ctx, &api.PolicyBinding{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "remote-policy", Name: "entry"},
-		Spec:       api.PolicyBindingSpec{SubjectMatch: &api.SubjectMatch{}, PolicyRef: api.PolicyRef{Kind: model.KindPolicySet, Name: "tenant-root"}},
+		Spec:       api.PolicyBindingSpec{SubjectMatch: &api.SubjectMatch{}, PolicyRef: &api.PolicyRef{Kind: model.KindPolicySet, Name: "tenant-root"}},
 	})).To(Succeed())
 
 	Expect(control.Create(ctx, &api.PolicySet{

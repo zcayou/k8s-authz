@@ -279,6 +279,24 @@ func review(ctx context.Context, pod, endpoint string, caller utils.Material) (i
 	return response.StatusCode, response.Body.Close()
 }
 
+// expectMemberPodList waits until the member's API server lets the e2e admin
+// list pods in namespace when allowed, or refuses it with the webhook's
+// fallback otherwise.
+func expectMemberPodList(ctx context.Context, namespace string, allowed bool) {
+	GinkgoHelper()
+	Eventually(func(g Gomega) {
+		output, err := suite.member.kubectl(ctx, "get", "pods", "-n", namespace,
+			"--as="+e2eUser, "--as-group="+e2eAdminGroup)
+		if allowed {
+			g.Expect(err).NotTo(HaveOccurred())
+			return
+		}
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(output).To(ContainSubstring("Forbidden"))
+		g.Expect(output).To(ContainSubstring("code=AuthorityFallback"))
+	}, 2*time.Minute).Should(Succeed())
+}
+
 // expectAllowed waits until the API server lets the e2e admin list pods.
 func expectAllowed(ctx context.Context, timeout time.Duration) {
 	GinkgoHelper()

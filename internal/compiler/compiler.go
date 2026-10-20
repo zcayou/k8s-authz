@@ -3,6 +3,7 @@ package compiler
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -30,7 +31,8 @@ type Limits struct {
 	// MaxExpandedRulesPerBranch bounds the rule cubes one branch expands.
 	MaxExpandedRulesPerBranch int
 	// MaxBranchNodes bounds the arena of each branch: an authority's root
-	// branch, and one per binding and prohibition of its root PolicySet.
+	// branch, one per binding and prohibition of its root PolicySet, and one
+	// per PolicySet a selection matches.
 	MaxBranchNodes int
 	// MaxMergeNodes bounds an authority's composed Allow diagram and its merged
 	// prohibition diagram.
@@ -40,6 +42,11 @@ type Limits struct {
 	// MaxDiagramNodes bounds the program's diagrams together. Each authoritative
 	// failure is labeled, and an authority's failures are merged, within it.
 	MaxDiagramNodes int
+	// MaxSelectionMatches bounds the PolicySets one selection matches.
+	MaxSelectionMatches int
+	// MaxSelectedBranches bounds the branches an authority's selections detach,
+	// counted across every selection beneath it.
+	MaxSelectedBranches int
 }
 
 // DefaultLimits are the limits the operator compiles with.
@@ -52,6 +59,8 @@ func DefaultLimits() Limits {
 		MaxMergeNodes:              65536,
 		MaxExclusionNodes:          32768,
 		MaxDiagramNodes:            262144,
+		MaxSelectionMatches:        256,
+		MaxSelectedBranches:        1024,
 	}
 }
 
@@ -76,8 +85,17 @@ type builder struct {
 	sources        map[model.SourceKey]model.SourceObservation
 	output         Compilation
 	failures       map[authorityKey][]recordedFailure
+	discovered     map[authorityKey]*discovered
+	selections     map[string]model.Selection
 	diagnostics    map[string]model.Issue
 	exclusionNodes int
+}
+
+// discovered is what an authority's selections detached: how many branches,
+// and their Allow diagrams.
+type discovered struct {
+	branches int
+	allows   []string
 }
 
 // recordedFailure is an authoritative failure's issue and the bound
@@ -121,7 +139,7 @@ func errorf(reason model.IssueReason, document *model.DocumentKey, format string
 // or without a complete view, is unavailable. Compile only reads sources, whose
 // observations it shares with the caller.
 func Compile(config model.ServiceConfig, sources map[model.SourceKey]model.SourceObservation, limits Limits) (Compilation, error) {
-	b := &builder{limits: limits, sources: sources, output: Compilation{References: map[model.Reference]struct{}{}, Prepared: model.PreparedRevision{Endpoints: map[string]model.EndpointProgram{}, Predicates: map[string]model.Matcher{}, Contributions: map[string]model.Contribution{}, Diagrams: map[string]model.Diagram{}, Issues: map[string]model.ProgramIssue{}, Conditions: map[string]model.Condition{}}}, failures: map[authorityKey][]recordedFailure{}, diagnostics: map[string]model.Issue{}}
+	b := &builder{limits: limits, sources: sources, output: Compilation{Limits: limits, References: map[model.Reference]struct{}{}, Prepared: model.PreparedRevision{Endpoints: map[string]model.EndpointProgram{}, Predicates: map[string]model.Matcher{}, Contributions: map[string]model.Contribution{}, Diagrams: map[string]model.Diagram{}, Issues: map[string]model.ProgramIssue{}, Conditions: map[string]model.Condition{}}}, failures: map[authorityKey][]recordedFailure{}, discovered: map[authorityKey]*discovered{}, selections: map[string]model.Selection{}, diagnostics: map[string]model.Issue{}}
 	for _, endpoint := range config.Endpoints {
 		program := model.EndpointProgram{Name: endpoint.Name, WhenEvaluationFails: endpoint.WhenEvaluationFails, Callers: endpoint.Callers}
 		for _, authority := range endpoint.Authorities {
@@ -175,7 +193,8 @@ func (b *builder) newBranch() *branch {
 
 // authority compiles one authority: it selects the entry binding, applies
 // the entry's bound, compiles its target in the root branch, and merges
-// the resulting Allow diagrams. ceiling caps the builtins its conditions call.
+// the resulting Allow diagrams with those its selections detached. ceiling caps
+// the builtins its conditions call.
 func (b *builder) authority(endpoint model.EndpointConfig, authority model.AuthorityConfig, ceiling *model.BuiltinSet) model.AuthorityProgram {
 	result := model.AuthorityProgram{Name: authority.Binding.String(), Fallback: authority.Fallback, ProhibitionDiagramID: b.empty()}
 	u := useContext{endpoint: endpoint.Name, authority: result.Name, root: true, sources: map[model.SourceKey]bool{}, remaining: b.limits.MaxDelegationDepth, bound: 1, advisoryBound: 1, builtins: ceiling}
@@ -218,6 +237,9 @@ func (b *builder) authority(endpoint model.EndpointConfig, authority model.Autho
 			result.ProhibitionDiagramID = prohibitions
 		}
 	}
+	if found := b.discovered[authorityKey{endpoint.Name, result.Name}]; found != nil {
+		allows = append(allows, found.allows...)
+	}
 	if err = b.merge(&result, allows); err != nil {
 		root.failure(u, allowFailure, err)
 	}
@@ -233,6 +255,9 @@ func (w *branch) entry(ref model.Reference, u *useContext) (*model.Document, err
 	if entry.Binding == nil {
 		return nil, errorf(model.ReasonKindMismatch, &entry.Key, "entry %s is not a binding", ref)
 	}
+	if entry.Binding.Selection != nil {
+		return nil, errorf(model.ReasonKindMismatch, &entry.Key, "entry %s selects PolicySets; an entry targets one Policy or PolicySet", ref)
+	}
 	w.narrow(u, entry.Key)
 	return entry, nil
 }
@@ -242,7 +267,7 @@ func (w *branch) entry(ref model.Reference, u *useContext) (*model.Document, err
 // bound. It returns the bindings' Allow diagrams and the merged prohibition
 // diagram, which is empty when the returned error is from the merge.
 func (w *branch) rootSet(entry *model.Binding, u *useContext) ([]string, string, error) {
-	if err := w.enter(entry, u); err != nil {
+	if err := w.enter(entry, entry.Policy.Source, u); err != nil {
 		return nil, "", err
 	}
 	root, err := w.document(entry.Policy, u)
@@ -265,18 +290,10 @@ func (w *branch) rootSet(entry *model.Binding, u *useContext) ([]string, string,
 		{root.Set.Bindings, model.EffectAllow, &allows},
 	} {
 		for _, ref := range slot.refs {
-			worker := w.owner.newBranch()
-			context := u.derive()
-			context.root = false
-			var importErr error
-			if context.bound, importErr = worker.arena.Import(w.arena.Snapshot(u.bound)); importErr != nil {
-				context.bound = u.bound
-				w.failure(context, classFor(slot.effect), importErr)
+			worker, context, forkErr := w.fork(*u)
+			if forkErr != nil {
+				w.failure(context, classFor(slot.effect), forkErr)
 				continue
-			}
-			if context.advisoryBound, importErr = worker.advisoryArena.Import(w.advisoryArena.Snapshot(u.advisoryBound)); importErr != nil {
-				worker.stopAdvisories()
-				context.advisoryBound = 0
 			}
 			node := worker.binding(ref, context, slot.effect)
 			*slot.ids = append(*slot.ids, worker.persist(node, context, classFor(slot.effect)))
@@ -289,11 +306,30 @@ func (w *branch) rootSet(entry *model.Binding, u *useContext) ([]string, string,
 	return allows, merged, nil
 }
 
+// fork returns a new branch and a use derived from u that holds u's bounds
+// in it. When the bound doesn't fit the new branch, it returns the error,
+// with the use keeping u's bound for its failure.
+func (w *branch) fork(u useContext) (*branch, useContext, error) {
+	worker := w.owner.newBranch()
+	context := u.derive()
+	context.root = false
+	var err error
+	if context.bound, err = worker.arena.Import(w.arena.Snapshot(u.bound)); err != nil {
+		context.bound = u.bound
+		return worker, context, err
+	}
+	if context.advisoryBound, err = worker.advisoryArena.Import(w.advisoryArena.Snapshot(u.advisoryBound)); err != nil {
+		worker.stopAdvisories()
+		context.advisoryBound = 0
+	}
+	return worker, context, nil
+}
+
 // merge sets the authority's composed Allow diagram. One that exceeds
 // MaxMergeNodes or MaxSelectorKeys is omitted, and the independent diagrams
-// are pushed in its place. Each grants only what its root binding grants
-// alone, so a request the bindings cover only together is no longer granted,
-// which the returned error reports.
+// are pushed in its place. Each grants only what its root binding or discovered
+// PolicySet grants alone, so a request they cover only together is no longer
+// granted, which the returned error reports.
 func (b *builder) merge(result *model.AuthorityProgram, allows []string) error {
 	if len(allows) == 1 {
 		result.ComposedAllowDiagramID = allows[0]
@@ -302,7 +338,7 @@ func (b *builder) merge(result *model.AuthorityProgram, allows []string) error {
 	composed, err := b.union(allows, b.limits.MaxMergeNodes)
 	if err != nil {
 		result.IndependentAllowDiagramIDs = allows
-		return errorf(model.ReasonGrantsNotComposed, nil, "the root PolicySet's grants can't be composed (%v), so a request is granted only when one of its bindings covers all of it", err)
+		return errorf(model.ReasonGrantsNotComposed, nil, "the authority's grants can't be composed (%v), so a request is granted only when one root binding or discovered PolicySet covers all of it", err)
 	}
 	result.ComposedAllowDiagramID = composed
 	return nil
@@ -390,6 +426,9 @@ func (w *branch) persist(root model.NodeID, u useContext, class failureClass) st
 func (b *builder) finalize() (Compilation, error) {
 	maxNodes := b.limits.MaxDiagramNodes
 	b.finalizeDiagnostics()
+	for _, id := range slices.Sorted(maps.Keys(b.selections)) {
+		b.output.Selections = append(b.output.Selections, b.selections[id])
+	}
 	prunePrepared(&b.output.Prepared)
 	if !preparedWithinNodeLimit(b.output.Prepared, maxNodes) && len(b.output.Prepared.Exclusions) > 0 {
 		b.output.Prepared.Exclusions = nil
@@ -526,21 +565,28 @@ func (w *branch) failure(u useContext, class failureClass, err error) {
 	key := authorityKey{u.endpoint, u.authority}
 	w.owner.failures[key] = append(w.owner.failures[key], recordedFailure{issueID: id, bound: w.arena.Snapshot(u.bound)})
 }
-func (w *branch) document(ref model.Reference, u *useContext) (*model.Document, error) {
+
+// use counts one contextual use of the branch, and checks that it may read
+// source.
+func (w *branch) use(u useContext, source model.SourceKey) error {
 	w.uses++
 	if limit := w.owner.limits.MaxContextualUsesPerBranch; w.uses > limit {
-		return nil, fmt.Errorf("branch exceeds %d contextual uses: %w", limit, model.ErrLimit)
+		return fmt.Errorf("branch exceeds %d contextual uses: %w", limit, model.ErrLimit)
 	}
-	if !u.sources[ref.Source] {
-		return nil, errorf(model.ReasonSourceNotAllowed, nil, "source %s/%s is outside the delegated source set", ref.Source.Namespace, ref.Source.Name)
+	if !u.sources[source] {
+		return errorf(model.ReasonSourceNotAllowed, nil, "source %s/%s is outside the delegated source set", source.Namespace, source.Name)
+	}
+	return nil
+}
+
+func (w *branch) document(ref model.Reference, u *useContext) (*model.Document, error) {
+	if err := w.use(*u, ref.Source); err != nil {
+		return nil, err
 	}
 	w.owner.output.References[ref] = struct{}{}
-	source, found := w.owner.sources[ref.Source]
-	if !found {
-		return nil, errorf(model.ReasonSourceUnavailable, nil, "source %s/%s isn't a registered PolicySource", ref.Source.Namespace, ref.Source.Name)
-	}
-	if !source.Complete {
-		return nil, errorf(model.ReasonSourceUnavailable, nil, "source %s/%s is unavailable (%s)", ref.Source.Namespace, ref.Source.Name, source.Failure.Reason)
+	source, err := available(w.owner.sources, ref.Source)
+	if err != nil {
+		return nil, err
 	}
 	key := model.DocumentKey{Source: source.Instance, Group: ref.Group, Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name}
 	state, found := source.Documents[ref]
@@ -667,12 +713,20 @@ func (w *branch) binding(ref model.Reference, u useContext, effect model.Effect)
 		w.failure(u, classFor(effect), err)
 		return 0
 	}
+	if doc.Binding.Selection != nil {
+		if effect == model.EffectDeny {
+			w.failure(u, authoritativeFailure, errorf(model.ReasonKindMismatch, &doc.Key, "prohibition %s selects PolicySets, not a leaf", ref))
+			return 0
+		}
+		w.selection(doc.Binding, u)
+		return 0
+	}
 	if doc.Binding.Policy.Kind == model.KindPolicySet {
 		if effect == model.EffectDeny {
 			w.failure(u, authoritativeFailure, errorf(model.ReasonKindMismatch, &doc.Key, "prohibition %s targets a PolicySet, not a leaf", ref))
 			return 0
 		}
-		if err := w.enter(doc.Binding, &u); err != nil {
+		if err := w.enter(doc.Binding, doc.Binding.Policy.Source, &u); err != nil {
 			w.failure(u, allowFailure, err)
 			return 0
 		}
@@ -739,7 +793,51 @@ func (w *branch) constrain(binding *model.Binding, u *useContext, effect model.E
 	u.advisoryBound = w.advisoryIntersect(u.advisoryBound, bound.advisoryRoot)
 	return nil
 }
-func (w *branch) enter(binding *model.Binding, u *useContext) error {
+
+// selection compiles each PolicySet binding's selection matches in a branch
+// of its own, as a delegation from u to it. The selection counts as one
+// contextual use of w, and fails as a whole when its matches would exceed
+// the branches the authority has left. The matches' diagrams join
+// the authority's merge, not w's.
+func (w *branch) selection(binding *model.Binding, u useContext) {
+	selection := *binding.Selection
+	if err := w.use(u, selection.Source); err != nil {
+		w.failure(u, allowFailure, err)
+		return
+	}
+	w.owner.selections[model.Digest(selection)] = selection
+	selected := Select(selection, w.owner.sources, w.owner.limits.MaxSelectionMatches)
+	if err := selected.err(); err != nil {
+		w.failure(u, allowFailure, err)
+		return
+	}
+	key := authorityKey{u.endpoint, u.authority}
+	found := w.owner.discovered[key]
+	if found == nil {
+		found = &discovered{}
+		w.owner.discovered[key] = found
+	}
+	if limit := w.owner.limits.MaxSelectedBranches; found.branches+len(selected.Matches) > limit {
+		w.failure(u, allowFailure, fmt.Errorf("selections beneath the authority match more than %d PolicySets: %w", limit, model.ErrLimit))
+		return
+	}
+	found.branches += len(selected.Matches)
+	for _, match := range selected.Matches {
+		worker, context, err := w.fork(u)
+		if err != nil {
+			w.failure(context, allowFailure, err)
+			continue
+		}
+		if err := worker.enter(binding, match.Source, &context); err != nil {
+			worker.failure(context, allowFailure, err)
+			continue
+		}
+		found.allows = append(found.allows, worker.persist(worker.set(match, context), context, allowFailure))
+	}
+}
+
+// enter delegates from u, through binding, to a PolicySet of target.
+func (w *branch) enter(binding *model.Binding, target model.SourceKey, u *useContext) error {
 	if !u.root {
 		if u.remaining <= 0 {
 			return errorf(model.ReasonDepthExceeded, nil, "delegation depth exhausted")
@@ -749,10 +847,10 @@ func (w *branch) enter(binding *model.Binding, u *useContext) error {
 	if binding.MaxDepth != nil {
 		u.remaining = min(u.remaining, *binding.MaxDepth)
 	}
-	if !u.sources[binding.Policy.Source] {
+	if !u.sources[target] {
 		return errorf(model.ReasonSourceNotAllowed, nil, "target source is outside incoming source set")
 	}
-	sources := map[model.SourceKey]bool{binding.Policy.Source: true}
+	sources := map[model.SourceKey]bool{target: true}
 	if binding.Sources != nil {
 		sources = map[model.SourceKey]bool{}
 		for _, source := range binding.Sources {

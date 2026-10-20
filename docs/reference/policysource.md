@@ -28,6 +28,7 @@ spec:
       names: ["*"]
     - kinds: [ClusterRole]
       names: [view]
+  namespaceLabels: Ignore
   synchronization: Active
   contribution: Active
   rego:
@@ -41,6 +42,7 @@ spec:
 | `provider.type` | yes | | `Kubernetes`. |
 | `provider.kubernetes.kubeconfig.secretRef` | no | | A Secret key (`name`, `key`) in the `PolicySource`'s namespace holding a self-contained kubeconfig. Omitted, the source reads the operator's own cluster with the operator's identity. |
 | `collection` | yes | | Up to 64 ranges of documents to collect. See [collection](#collection). |
+| `namespaceLabels` | no | `Ignore` | `Collect` reads the labels of the namespaces the collection covers: every namespace when a range selects `"*"`, otherwise each namespace a range names. A `policySelector` with a non-empty `namespaceSelector` needs it. See [namespace labels](../guides/policy-sources.md#namespace-labels). |
 | `synchronization` | no | `Active` | `Paused` stops reading and keeps serving the last complete view. |
 | `contribution` | no | `Active` | `Inert` removes the source's documents from compiled policy without stopping its reader. |
 | `rego` | no | | Present, allows the source's documents to carry Rego conditions. `rego: {}` allows the default builtins, and `rego.allowedBuiltins` allows exactly the listed ones. Absent, no conditions are allowed in this source or beneath its bindings and `PolicySet`s. |
@@ -67,4 +69,4 @@ Each range:
 
 ## Owned objects
 
-Secrets of type `authorization.zctx.io/source-cache` named `<name>-source-cache-<n>` in the `PolicySource`'s namespace, holding the persisted view. They're deleted with the `PolicySource`.
+Secrets of type `authorization.zctx.io/source-cache` named `<name>-source-cache-<n>` in the `PolicySource`'s namespace, holding the persisted view, its namespace labels included. They're deleted with the `PolicySource`.

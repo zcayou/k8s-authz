@@ -142,8 +142,8 @@ func cacheView(ctx context.Context, controlClient client.Client, owner *api.Poli
 // the reader and its emit function once it runs.
 func runReader(registry *source.Registry, object *api.PolicySource) (*utils.FakeReader, func(model.SourceObservation)) {
 	GinkgoHelper()
-	reader := utils.NewFakeReader(nil)
-	registration := source.Registration{Instance: sourceInstance(object), Digest: "fake", Settings: sourceSettings(object.Spec)}
+	reader := utils.NewFakeReader()
+	registration := source.Registration{Instance: sourceInstance(object), Coverage: utils.Coverage{}, Digest: "fake", Settings: sourceSettings(object.Spec)}
 	Expect(registry.Apply(registration, func() (source.Reader, error) { return reader, nil })).To(Succeed())
 	var emit func(model.SourceObservation)
 	Eventually(reader.Emitters()).Should(Receive(&emit))

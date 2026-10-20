@@ -25,17 +25,20 @@ import (
 )
 
 var (
-	crdKind     = apiextensionsv1.SchemeGroupVersion.WithKind("CustomResourceDefinition")
-	crdResource = apiextensionsv1.SchemeGroupVersion.WithResource("customresourcedefinitions")
+	crdKind           = apiextensionsv1.SchemeGroupVersion.WithKind("CustomResourceDefinition")
+	crdResource       = apiextensionsv1.SchemeGroupVersion.WithResource("customresourcedefinitions")
+	namespaceKind     = corev1.SchemeGroupVersion.WithKind("Namespace")
+	namespaceResource = corev1.SchemeGroupVersion.WithResource("namespaces")
 )
 
-// Reader keeps one informer for each query its collection plans, plus one
-// for each document kind's CRD, and emits the source's view whenever any
-// of them changes. It runs once.
+// Reader keeps one informer for each query its collection plans, including
+// the namespaces whose labels it reads, plus one for each document kind's CRD,
+// and emits the source's view whenever any of them changes. It runs once.
 type Reader struct {
 	instance   model.SourceInstance
 	collection Collection
 	documents  []*collectionInformer
+	namespaces []*collectionInformer
 	schemas    []*collectionInformer
 	// changed holds at most one pending view assembly, so any number of informer
 	// changes coalesce into one.
@@ -53,6 +56,12 @@ type collectionInformer struct {
 type document struct {
 	metav1.ObjectMeta
 	state model.DocumentState
+}
+
+// namespace is what a namespace informer stores in place of the Namespace:
+// its identity and labels.
+type namespace struct {
+	metav1.ObjectMeta
 }
 
 // schemaState is what a CRD informer stores in place of the CRD: whether
@@ -74,19 +83,19 @@ func NewReader(client dynamic.Interface, instance model.SourceInstance, collecti
 		}
 	}
 	reader.documents = reader.newInformers(client, queries, reader.ingest)
+	reader.namespaces = reader.newInformers(client, namespaceQueries(collection), observeNamespace)
 	reader.schemas = reader.newInformers(client, schemas, observeSchema)
 	return reader
 }
 
-// Collects reports whether the reader's collection covers reference.
-func (r *Reader) Collects(reference model.Reference) bool {
-	return r.collection.Collects(reference)
+func (r *Reader) informers() []*collectionInformer {
+	return slices.Concat(r.documents, r.namespaces, r.schemas)
 }
 
 // Run emits the source's view after every informer change until ctx ends.
 // Informers own list and watch recovery.
 func (r *Reader) Run(ctx context.Context, emit func(model.SourceObservation)) {
-	informers := slices.Concat(r.documents, r.schemas)
+	informers := r.informers()
 	synced := make([]cache.InformerSynced, 0, len(informers))
 	var workers sync.WaitGroup
 	defer workers.Wait()
@@ -122,7 +131,7 @@ func (r *Reader) trigger() {
 // observe assembles the view from the informer stores. It isn't ready until
 // every informer has synced, unless a list or watch is failing.
 func (r *Reader) observe() (model.SourceObservation, bool) {
-	informers := slices.Concat(r.documents, r.schemas)
+	informers := r.informers()
 	if err := watchFailure(informers); err != nil {
 		return r.failure(api.ReasonWatchFailing, err), true
 	}
@@ -145,6 +154,17 @@ func (r *Reader) observe() (model.SourceObservation, bool) {
 			reference := state.Key.Reference()
 			if _, found := observation.Documents[reference]; !found {
 				observation.Documents[reference] = state
+			}
+		}
+	}
+	if r.collection.NamespaceLabels {
+		observation.CollectsNamespaceLabels = true
+		observation.NamespaceLabels = map[string]map[string]string{}
+		for _, collection := range r.namespaces {
+			for _, item := range collection.store.List() {
+				if stored, ok := item.(*namespace); ok && r.collection.CollectsNamespace(stored.Name) {
+					observation.NamespaceLabels[stored.Name] = stored.Labels
+				}
 			}
 		}
 	}
@@ -247,6 +267,18 @@ func (r *Reader) ingest(item any) (any, error) {
 	state := validation.DecodeDocument(r.instance, object)
 	state.Object = encoded
 	return &document{ObjectMeta: identity(object), state: state}, nil
+}
+
+// observeNamespace is the namespace informers' transform. It keeps only
+// the Namespace's identity and labels.
+func observeNamespace(item any) (any, error) {
+	object, ok := item.(*unstructured.Unstructured)
+	if !ok {
+		return item, nil
+	}
+	meta := identity(object)
+	meta.Labels = object.GetLabels()
+	return &namespace{ObjectMeta: meta}, nil
 }
 
 func observeSchema(item any) (any, error) {

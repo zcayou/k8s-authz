@@ -1,8 +1,8 @@
 // Package compiler resolves source-qualified policy graphs in contextual uses
 // and compiles bounded, immutable permission programs without network access.
 // A Compilation records the documents it read, including unresolved references,
-// so a cache can tell when it's stale. Diagnostics retain each use's inherited
-// restrictions.
+// and the selections it evaluated, so a cache can tell when it's stale.
+// Diagnostics retain each use's inherited restrictions.
 //
 // A failure is classified by what it breaks. A failure on an Allow path grants
 // nothing and is reported as a diagnostic. So is a failure resolving the bound
@@ -22,16 +22,28 @@
 // A prohibition decides without conditions, so a Deny use that would carry one
 // fails authoritatively.
 //
+// A binding with a selection delegates to each PolicySet the selection matches,
+// as a binding that references it would. [Select] evaluates a selection,
+// for the compiler, the program cache and the CLI alike. Each match compiles
+// in a branch of its own under the selecting use's bound, principals,
+// conditions and sources, so a match that exceeds its branch's limits fails
+// alone, and its diagram joins the authority's merge beside those of its root
+// bindings. A selection that matches more than MaxSelectionMatches PolicySets,
+// or whose matches would take the authority past MaxSelectedBranches detached
+// branches, fails as a whole. A selecting binding used as an authority's entry
+// or as a prohibition fails authoritatively.
+//
 // [Limits] bound each branch and each merged diagram with fixed caps, so one
 // authority's configuration never changes another's decisions, and every saved
 // diagram branches on at most [MaxSelectorKeys] selector keys, the depth
 // the engine's traversal walks. A branch or prohibition merge over its limits
 // records a failure for its use. A composed Allow diagram over its limits
 // is omitted, and the independent diagrams take its place. Each grants only
-// what its root binding grants alone, so the authority's root use records
-// a GrantsNotComposed diagnostic: a request its bindings cover only together
-// is no longer granted. Only two limits fail a compile: an authority's
-// authoritative failures that don't fit MaxDiagramNodes or MaxSelectorKeys,
-// and a program whose diagrams together exceed MaxDiagramNodes. Compile then
-// returns an error wrapping model.ErrLimit.
+// what its root binding or discovered PolicySet grants alone, so
+// the authority's root use records a GrantsNotComposed diagnostic: a request
+// they cover only together is no longer granted. Only two limits fail
+// a compile: an authority's authoritative failures that don't fit
+// MaxDiagramNodes or MaxSelectorKeys, and a program whose diagrams together
+// exceed MaxDiagramNodes. Compile then returns an error wrapping
+// model.ErrLimit.
 package compiler

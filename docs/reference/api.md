@@ -486,6 +486,25 @@ _Appears in:_
 | `kubeconfig` _[KubeconfigReference](#kubeconfigreference)_ | kubeconfig selects an explicit kubeconfig credential. Omission reads<br />from the operator's own cluster with the operator's credentials. |  | Optional: \{\} <br /> |
 
 
+#### NamespaceLabels
+
+_Underlying type:_ _string_
+
+NamespaceLabels selects whether a PolicySource reads the labels
+of the namespaces its collection covers.
+
+_Validation:_
+- Enum: [Collect Ignore]
+
+_Appears in:_
+- [PolicySourceSpec](#policysourcespec)
+
+| Field | Description |
+| --- | --- |
+| `Collect` | NamespaceLabelsCollect reads the labels of the collected namespaces.<br /> |
+| `Ignore` | NamespaceLabelsIgnore reads no namespace labels.<br /> |
+
+
 #### OperationRule
 
 
@@ -608,7 +627,8 @@ PolicyBinding attaches principals to a Policy, PolicySet, or native role definit
 
 
 
-PolicyBindingSpec attaches principals to one policy target.
+PolicyBindingSpec attaches principals to one policy target, or to each
+PolicySet a selector matches.
 
 
 
@@ -617,7 +637,8 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `policyRef` _[PolicyRef](#policyref)_ | policyRef identifies the permission definition. |  | Required: \{\} <br /> |
+| `policyRef` _[PolicyRef](#policyref)_ | policyRef identifies the permission definition. |  | Optional: \{\} <br /> |
+| `policySelector` _[PolicySelector](#policyselector)_ | policySelector selects PolicySets by their labels and their namespaces'<br />labels. Each match is delegated to as a policyRef to it would be. |  | Optional: \{\} <br /> |
 | `subjects` _[Subject](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.37/#subject-v1-rbac-authorization-k8s-io) array_ | subjects contains exact principals combined by OR. |  | MaxItems: 256 <br />MinItems: 1 <br />Optional: \{\} <br /> |
 | `subjectMatch` _[SubjectMatch](#subjectmatch)_ | subjectMatch selects principals with extended fixed-form predicates. |  | Optional: \{\} <br /> |
 | `constraints` _[BindingConstraints](#bindingconstraints)_ | constraints narrows the target and its descendants. |  | Optional: \{\} <br /> |
@@ -679,6 +700,24 @@ _Appears in:_
 | `name` _string_ | name is the referenced permission definition's name. |  | MaxLength: 253 <br />MinLength: 1 <br />Required: \{\} <br /> |
 | `namespace` _string_ | namespace is the logical namespace of a namespaced definition. Omission<br />means the referencing document's namespace. |  | MaxLength: 63 <br />MinLength: 1 <br />Pattern: `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$` <br />Optional: \{\} <br /> |
 | `sourceRef` _[SourceRef](#sourceref)_ | sourceRef selects another allowed PolicySource. |  | Optional: \{\} <br /> |
+
+
+#### PolicySelector
+
+
+
+PolicySelector selects the PolicySets of one source.
+
+
+
+_Appears in:_
+- [PolicyBindingSpec](#policybindingspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `sourceRef` _[SourceRef](#sourceref)_ | sourceRef selects another allowed PolicySource. Omission means the binding's<br />own source. |  | Optional: \{\} <br /> |
+| `namespaceSelector` _[LabelSelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.37/#labelselector-v1-meta)_ | namespaceSelector selects the namespaces whose PolicySets may match,<br />by the namespaces' labels in the source. An empty selector selects every<br />namespace; any other requires the source to collect namespace labels. |  | Required: \{\} <br /> |
+| `selector` _[LabelSelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.37/#labelselector-v1-meta)_ | selector selects PolicySets by their own labels. |  | Required: \{\} <br /> |
 
 
 #### PolicySet
@@ -783,6 +822,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `provider` _[PolicySourceProvider](#policysourceprovider)_ | provider selects and configures the acquisition provider. |  | Required: \{\} <br /> |
 | `collection` _[KeyRange](#keyrange) array_ | collection contains the explicit ranges collected by this source. |  | MaxItems: 64 <br />Required: \{\} <br /> |
+| `namespaceLabels` _[NamespaceLabels](#namespacelabels)_ | namespaceLabels selects whether the source reads the labels<br />of the namespaces its collection covers: every namespace when a range<br />selects "*", otherwise each namespace a range names. A policySelector's<br />non-empty namespaceSelector requires Collect. | Ignore | Enum: [Collect Ignore] <br />Optional: \{\} <br /> |
 | `synchronization` _[Synchronization](#synchronization)_ | synchronization selects whether the source reads from its provider.<br />Paused stops reading and keeps serving the last complete view. | Active | Enum: [Active Paused] <br />Optional: \{\} <br /> |
 | `contribution` _[Contribution](#contribution)_ | contribution selects whether the source's documents take part in compiled<br />policy. Toggling it never restarts acquisition. | Active | Enum: [Active Inert] <br />Optional: \{\} <br /> |
 | `rego` _[PolicySourceRego](#policysourcerego)_ | rego allows the source's documents to carry Rego conditions. Omission<br />forbids them, here and in every use beneath this source. |  | Optional: \{\} <br /> |
@@ -1062,6 +1102,7 @@ _Appears in:_
 - [Issue](#issue)
 - [PolicyImport](#policyimport)
 - [PolicyRef](#policyref)
+- [PolicySelector](#policyselector)
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |

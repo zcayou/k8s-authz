@@ -80,6 +80,18 @@ const (
 	ContributionInert Contribution = "Inert"
 )
 
+// NamespaceLabels selects whether a PolicySource reads the labels
+// of the namespaces its collection covers.
+// +kubebuilder:validation:Enum=Collect;Ignore
+type NamespaceLabels string
+
+const (
+	// NamespaceLabelsCollect reads the labels of the collected namespaces.
+	NamespaceLabelsCollect NamespaceLabels = "Collect"
+	// NamespaceLabelsIgnore reads no namespace labels.
+	NamespaceLabelsIgnore NamespaceLabels = "Ignore"
+)
+
 // PolicySourceSpec defines acquisition, collection and lifecycle.
 type PolicySourceSpec struct {
 	// provider selects and configures the acquisition provider.
@@ -91,6 +103,14 @@ type PolicySourceSpec struct {
 	// +listType=atomic
 	// +kubebuilder:validation:MaxItems=64
 	Collection []KeyRange `json:"collection"`
+
+	// namespaceLabels selects whether the source reads the labels
+	// of the namespaces its collection covers: every namespace when a range
+	// selects "*", otherwise each namespace a range names. A policySelector's
+	// non-empty namespaceSelector requires Collect.
+	// +optional
+	// +kubebuilder:default=Ignore
+	NamespaceLabels NamespaceLabels `json:"namespaceLabels,omitempty"`
 
 	// synchronization selects whether the source reads from its provider.
 	// Paused stops reading and keeps serving the last complete view.

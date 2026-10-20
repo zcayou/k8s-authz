@@ -8,23 +8,30 @@ import (
 	"github.com/zcayou/k8s-authz/internal/model"
 )
 
-// Collection is the key ranges a PolicySource collects.
-type Collection []api.KeyRange
+// Collection is what a PolicySource collects: its key ranges, and whether
+// it reads the labels of the namespaces they cover.
+type Collection struct {
+	Ranges          []api.KeyRange `json:"ranges"`
+	NamespaceLabels bool           `json:"namespaceLabels"`
+}
 
 // NewCollection normalizes a PolicySource's collection: each range's kinds,
 // namespaces and names are sorted, and the ranges are sorted with duplicates
 // dropped, so an equivalent spec yields an equal collection.
-func NewCollection(ranges []api.KeyRange) Collection {
-	collection := make(Collection, 0, len(ranges))
-	for _, keyRange := range ranges {
-		collection = append(collection, api.KeyRange{
+func NewCollection(spec api.PolicySourceSpec) Collection {
+	ranges := make([]api.KeyRange, 0, len(spec.Collection))
+	for _, keyRange := range spec.Collection {
+		ranges = append(ranges, api.KeyRange{
 			Kinds:      slices.Sorted(slices.Values(keyRange.Kinds)),
 			Namespaces: slices.Sorted(slices.Values(keyRange.Namespaces)),
 			Names:      slices.Sorted(slices.Values(keyRange.Names)),
 		})
 	}
-	slices.SortFunc(collection, compareRanges)
-	return slices.CompactFunc(collection, func(left, right api.KeyRange) bool { return compareRanges(left, right) == 0 })
+	slices.SortFunc(ranges, compareRanges)
+	return Collection{
+		Ranges:          slices.CompactFunc(ranges, func(left, right api.KeyRange) bool { return compareRanges(left, right) == 0 }),
+		NamespaceLabels: spec.NamespaceLabels == api.NamespaceLabelsCollect,
+	}
 }
 
 // Collects reports whether the collection covers reference.
@@ -33,10 +40,24 @@ func (c Collection) Collects(reference model.Reference) bool {
 	if !found || documentKind.Resource.Group != reference.Group || documentKind.Namespaced != (reference.Namespace != "") {
 		return false
 	}
-	return slices.ContainsFunc(c, func(keyRange api.KeyRange) bool {
+	return slices.ContainsFunc(c.Ranges, func(keyRange api.KeyRange) bool {
 		return slices.Contains(keyRange.Kinds, reference.Kind) &&
 			(!documentKind.Namespaced || selects(keyRange.Namespaces, reference.Namespace)) &&
 			selects(keyRange.Names, reference.Name)
+	})
+}
+
+// CollectsNamespaceLabels reports whether the collection reads namespace
+// labels.
+func (c Collection) CollectsNamespaceLabels() bool {
+	return c.NamespaceLabels
+}
+
+// CollectsNamespace reports whether the collection reads namespace's labels:
+// whether it reads namespace labels and a range covers namespace.
+func (c Collection) CollectsNamespace(namespace string) bool {
+	return c.NamespaceLabels && slices.ContainsFunc(c.Ranges, func(keyRange api.KeyRange) bool {
+		return selects(keyRange.Namespaces, namespace)
 	})
 }
 

@@ -24,10 +24,14 @@ import (
 // PolicyBindingSpecApplyConfiguration represents a declarative configuration of the PolicyBindingSpec type for use
 // with apply.
 //
-// PolicyBindingSpec attaches principals to one policy target.
+// PolicyBindingSpec attaches principals to one policy target, or to each
+// PolicySet a selector matches.
 type PolicyBindingSpecApplyConfiguration struct {
 	// policyRef identifies the permission definition.
 	PolicyRef *PolicyRefApplyConfiguration `json:"policyRef,omitempty"`
+	// policySelector selects PolicySets by their labels and their namespaces'
+	// labels. Each match is delegated to as a policyRef to it would be.
+	PolicySelector *PolicySelectorApplyConfiguration `json:"policySelector,omitempty"`
 	// subjects contains exact principals combined by OR.
 	Subjects []v1.Subject `json:"subjects,omitempty"`
 	// subjectMatch selects principals with extended fixed-form predicates.
@@ -47,6 +51,14 @@ func PolicyBindingSpec() *PolicyBindingSpecApplyConfiguration {
 // If called multiple times, the PolicyRef field is set to the value of the last call.
 func (b *PolicyBindingSpecApplyConfiguration) WithPolicyRef(value *PolicyRefApplyConfiguration) *PolicyBindingSpecApplyConfiguration {
 	b.PolicyRef = value
+	return b
+}
+
+// WithPolicySelector sets the PolicySelector field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the PolicySelector field is set to the value of the last call.
+func (b *PolicyBindingSpecApplyConfiguration) WithPolicySelector(value *PolicySelectorApplyConfiguration) *PolicyBindingSpecApplyConfiguration {
+	b.PolicySelector = value
 	return b
 }
 

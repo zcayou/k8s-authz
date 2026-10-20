@@ -9,6 +9,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	gomegatypes "github.com/onsi/gomega/types"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -56,6 +57,44 @@ var _ = Describe("Reader", func() {
 		receiveComplete(observations, BeEmpty())
 	}, NodeTimeout(30*time.Second))
 
+	It("reads the labels of the namespaces its collection names and follows label-only changes", func(ctx SpecContext) {
+		namespace := newNamespace(ctx, "reader-namespaces")
+		labelNamespace(ctx, namespace, map[string]string{"owner": "infra"})
+		instance, collection := policyRegistration(namespace, namespace, "workloads")
+		collection.NamespaceLabels = true
+		observations := runReader(ctx, newReader(cfg, instance, collection))
+		owner := func(owner string) gomegatypes.GomegaMatcher {
+			return And(HaveField("Complete", BeTrue()), HaveField("CollectsNamespaceLabels", BeTrue()),
+				HaveField("NamespaceLabels", And(HaveLen(1), HaveKeyWithValue(namespace, HaveKeyWithValue("owner", owner)))))
+		}
+		Eventually(observations).WithTimeout(convergence).Should(Receive(owner("infra")))
+
+		labelNamespace(ctx, namespace, map[string]string{"owner": "netsec"})
+		Eventually(observations).WithTimeout(convergence).Should(Receive(owner("netsec")))
+	}, NodeTimeout(30*time.Second))
+
+	It("admits no view while its credential can't list the namespaces whose labels it reads", func(ctx SpecContext) {
+		namespace := newNamespace(ctx, "reader-namespaces-forbidden")
+		account, _ := grantReader(ctx, namespace)
+		kubeconfig, err := utils.ServiceAccountKubeconfig(ctx, cfg, account, cfg.Host)
+		Expect(err).NotTo(HaveOccurred())
+		credential, err := kubernetessource.ParseKubeconfig(kubeconfig)
+		Expect(err).NotTo(HaveOccurred())
+		instance, collection := policyRegistration("namespaces-forbidden", namespace, "*")
+		collection.NamespaceLabels = true
+		registry := startRegistry(credential, instance, collection)
+		Eventually(func(g Gomega) {
+			health := registry.Health(instance.Key)
+			g.Expect(health.Reason).To(Equal(api.ReasonWatchFailing))
+			g.Expect(health.Message).To(ContainSubstring("namespaces"))
+		}).WithTimeout(convergence).Should(Succeed())
+		Expect(registry.Snapshot()[instance.Key].Complete).To(BeFalse())
+
+		grantSelectionReader(ctx, account)
+		view := synchronizedView(registry, instance.Key)
+		Expect(view.NamespaceLabels).To(HaveKey(namespace))
+	}, NodeTimeout(30*time.Second))
+
 	It("reports WatchFailing and retains its admitted view across API disconnection", func(ctx SpecContext) {
 		namespace := newNamespace(ctx, "reader-reconnect")
 		var offline atomic.Bool
@@ -67,7 +106,7 @@ var _ = Describe("Reader", func() {
 			return true
 		})
 		instance, collection := policyRegistration("reconnect", namespace, "workloads")
-		registry := startRegistry(instance, newReader(proxyConfig(server), instance, collection))
+		registry := startRegistry(proxyConfig(server), instance, collection)
 		initial := synchronizedView(registry, instance.Key)
 		Expect(initial.Documents).To(BeEmpty())
 
@@ -94,7 +133,7 @@ var _ = Describe("Reader", func() {
 		Expect(err).NotTo(HaveOccurred())
 		server := apiProxy(credential, func(http.ResponseWriter, *http.Request) bool { return false })
 		instance, collection := policyRegistration("forbidden", namespace, "workloads")
-		registry := startRegistry(instance, newReader(proxyConfig(server), instance, collection))
+		registry := startRegistry(proxyConfig(server), instance, collection)
 		initial := synchronizedView(registry, instance.Key)
 		Expect(initial.Documents).To(HaveLen(1))
 
@@ -121,7 +160,7 @@ var _ = Describe("Reader", func() {
 			return true
 		})
 		instance, collection := policyRegistration("empty-recovery", namespace, "*")
-		registry := startRegistry(instance, newReader(proxyConfig(server), instance, collection))
+		registry := startRegistry(proxyConfig(server), instance, collection)
 		initial := synchronizedView(registry, instance.Key)
 		Expect(initial.Documents).To(BeEmpty())
 

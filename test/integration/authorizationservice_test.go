@@ -19,6 +19,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	api "github.com/zcayou/k8s-authz/api/v1alpha1"
@@ -218,7 +219,7 @@ var _ = Describe("AuthorizationService reconciliation", func() {
 		Expect(createAndRemove(ctx, source)).To(Succeed())
 		Expect(k8sClient.Create(ctx, &api.PolicyBinding{
 			ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "entry"},
-			Spec:       api.PolicyBindingSpec{SubjectMatch: &api.SubjectMatch{}, PolicyRef: api.PolicyRef{Name: "allow"}},
+			Spec:       api.PolicyBindingSpec{SubjectMatch: &api.SubjectMatch{}, PolicyRef: &api.PolicyRef{Name: "allow"}},
 		})).To(Succeed())
 		policy := &api.Policy{
 			ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "allow"},
@@ -245,6 +246,47 @@ var _ = Describe("AuthorizationService reconciliation", func() {
 		policy.Spec.Include[0].Verbs = []string{"get", "list"}
 		Expect(k8sClient.Update(ctx, policy)).To(Succeed())
 		Eventually(desired).WithTimeout(convergence).ShouldNot(Equal(before))
+	})
+
+	It("changes the desired revision when only a label changes what a selection matches", func(ctx SpecContext) {
+		namespace := newNamespace(ctx, "selection-labels")
+		createSelectionDocuments(ctx, namespace)
+		Expect(createAndRemove(ctx, &api.PolicySource{
+			ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: utils.SourceName},
+			Spec: api.PolicySourceSpec{
+				Provider:        api.PolicySourceProvider{Type: "Kubernetes"},
+				Collection:      []api.KeyRange{{Kinds: []string{model.KindPolicy, model.KindPolicyBinding, model.KindPolicySet}, Namespaces: []string{namespace}, Names: []string{"*"}}},
+				NamespaceLabels: api.NamespaceLabelsCollect,
+			},
+		})).To(Succeed())
+		selecting := createService(ctx, namespace, func(service *api.AuthorizationService) {
+			service.Spec.Endpoints[0].Authorities = []api.Authority{{
+				BindingRef:         api.BindingRef{Name: "entry", Namespace: namespace, SourceRef: &api.SourceRef{Namespace: namespace, Name: utils.SourceName}},
+				WhenNoPolicyAllows: "Deny",
+			}}
+		})
+		installTLS(ctx, selecting)
+		desired := func(g Gomega) string {
+			status := serviceStatus(ctx, g, selecting)
+			g.Expect(status.DesiredRevision).NotTo(BeEmpty())
+			g.Expect(status.Issues).To(BeEmpty())
+			return status.DesiredRevision
+		}
+		var unmatched string
+		Eventually(func(g Gomega) { unmatched = desired(g) }).WithTimeout(convergence).Should(Succeed())
+
+		labelNamespace(ctx, namespace, map[string]string{"owner": "infra"})
+		Eventually(desired).WithTimeout(convergence).ShouldNot(Equal(unmatched))
+
+		Expect(retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			var access api.PolicySet
+			if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "access"}, &access); err != nil {
+				return err
+			}
+			access.Labels = nil
+			return k8sClient.Update(ctx, &access)
+		})).To(Succeed())
+		Eventually(desired).WithTimeout(convergence).Should(Equal(unmatched))
 	})
 
 	It("applies a DaemonSet that selects its pods by service UID and runtime kind", func(ctx SpecContext) {

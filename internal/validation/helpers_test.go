@@ -3,6 +3,8 @@ package validation_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -16,6 +18,15 @@ import (
 )
 
 var tenantSource = model.SourceInstance{Key: model.SourceKey{Namespace: "control", Name: "tenant-source"}, UID: "source-uid", Origin: "https://source.example"}
+
+// matchLabels returns a matchLabels object holding count distinct labels.
+func matchLabels(count int) string {
+	labels := make([]string, 0, count)
+	for index := range count {
+		labels = append(labels, fmt.Sprintf(`"key-%d":"value"`, index))
+	}
+	return "{" + strings.Join(labels, ",") + "}"
+}
 
 func customDocument(kind, name, spec string) *unstructured.Unstructured {
 	return utils.Document(kind, "tenant", name, spec)
@@ -42,7 +53,7 @@ func policyInclude(rule api.OperationRule) ([]model.Cube, error) {
 // and returns the principal it normalizes to or the binding's issue.
 func bindingPrincipal(subjects []api.Subject, match *api.SubjectMatch) (model.Matcher, error) {
 	GinkgoHelper()
-	spec, err := json.Marshal(api.PolicyBindingSpec{PolicyRef: api.PolicyRef{Name: "policy"}, Subjects: subjects, SubjectMatch: match})
+	spec, err := json.Marshal(api.PolicyBindingSpec{PolicyRef: &api.PolicyRef{Name: "policy"}, Subjects: subjects, SubjectMatch: match})
 	Expect(err).NotTo(HaveOccurred())
 	state := validation.DecodeDocument(tenantSource, customDocument(model.KindPolicyBinding, "binding", string(spec)))
 	if state.Document == nil {

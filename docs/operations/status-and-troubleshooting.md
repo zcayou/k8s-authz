@@ -111,10 +111,19 @@ teams      False          2h             3d
 1. Explain the request against the installed policy: `k8s-authz explain <service> -n <namespace> --endpoint <endpoint> --sar request.json`. See [Validating and explaining](../guides/validating-and-explaining.md).
 2. Check the `code`:
    - `RootProhibited`: a prohibition covers the request. The report names it. Remember that prohibitions apply to any part of a broad request, and that a named-namespace prohibition on `*` resources also covers cluster-scoped requests.
-   - `AuthorityFallback`: nothing granted the request in full, and the authority's `whenNoPolicyAllows` is `Deny`. Check [coverage](../concepts/policy-model.md#coverage): an all-namespace list needs a grant that includes the empty namespace `""`, and a request without a name isn't covered by `resourceNames`. If `status.issues` reports `GrantsNotComposed` for the authority, a broad request must be covered by a single root binding; see [Limits](../guides/writing-policies.md#limits).
+   - `AuthorityFallback`: nothing granted the request in full, and the authority's `whenNoPolicyAllows` is `Deny`. Check [coverage](../concepts/policy-model.md#coverage): an all-namespace list needs a grant that includes the empty namespace `""`, and a request without a name isn't covered by `resourceNames`. If `status.issues` reports `GrantsNotComposed` for the authority, a broad request must be covered by a single root binding or discovered `PolicySet`; see [Limits](../guides/writing-policies.md#limits).
    - `EvaluationError`: a guard is broken. The report and `status.issues` name it.
 3. Check `PolicyHealthy` and `status.issues` for broken grants on the path you expected. A broken branch grants nothing.
 4. Remember kube-apiserver's decision cache: a fixed policy may take up to `--unauthorized-ttl` (30 seconds by default) to take effect.
+
+### An application's `PolicySet` isn't attached
+
+A selecting binding attaches a `PolicySet` only while its labels match the `selector` and its namespace's labels match the `namespaceSelector`; see [Discovering PolicySets](../concepts/delegation.md#discovering-policysets).
+
+- Run `k8s-authz validate graph` with `--namespace-labels` for the selection's source. It lists each selection's matches, and warns with `NamespaceNotSelected` of each `PolicySet` the `selector` matches in a namespace the `namespaceSelector` leaves out, or whose labels the source holds none of.
+- `NamespaceLabelsNotCollected` in `status.issues` means the selection has a non-empty `namespaceSelector` but its source's `namespaceLabels` is `Ignore`.
+- A source with `namespaceLabels: Collect` reads only the labels of namespaces its collection covers, and needs `list` and `watch` on them.
+- `ResourceLimitExceeded` on the selecting binding means it, or the authority's selections together, match more `PolicySet`s than the [limits](../guides/writing-policies.md#limits) allow; the selection then attaches none.
 
 ### Everyone in an authority is denied, or everything returns `whenEvaluationFails`
 
@@ -131,7 +140,7 @@ The authority's entry binding probably can't be resolved: it's missing, invalid,
 | Reason | What to check |
 | --- | --- |
 | `InvalidCredential` | The kubeconfig Secret exists in the `PolicySource`'s namespace, has the named key, and is self-contained (https, embedded credentials, no exec plugins). |
-| `WatchFailing` | Network reachability and the reader's RBAC: `list` and `watch` on every collected kind and namespace, and on the k8s-authz CRDs it collects. |
+| `WatchFailing` | Network reachability and the reader's RBAC: `list` and `watch` on every collected kind and namespace, on those Namespaces when `namespaceLabels` is `Collect`, and on the k8s-authz CRDs it collects. |
 | `IncompatibleSchema` | The source API's k8s-authz CRDs are from a release that serves `v1alpha1`. |
 | `Pending` | The first read hasn't completed. Large collections take longer; otherwise treat it like `WatchFailing`. |
 

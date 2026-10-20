@@ -51,7 +51,7 @@ var _ = Describe("Samples", func() {
 			case api.GroupVersion.WithKind("PolicySource"):
 				var source api.PolicySource
 				Expect(validation.DecodeStrict(object, &source)).To(BeEmpty(), description)
-				sources = append(sources, shippedSource{model.SourceKey{Namespace: source.Namespace, Name: source.Name}, kubernetessource.NewCollection(source.Spec.Collection)})
+				sources = append(sources, shippedSource{model.SourceKey{Namespace: source.Namespace, Name: source.Name}, kubernetessource.NewCollection(source.Spec)})
 			default:
 				documents = append(documents, object)
 			}

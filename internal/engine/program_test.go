@@ -62,6 +62,37 @@ var _ = Describe("Program preparation", func() {
 			Expect(reused).To(BeTrue())
 			Expect(second).To(Equal(first))
 		})
+		It("prepares when the outcome of a selection changes, and only then", func() {
+			fixture.put(model.KindPolicyBinding, "apps", map[string]any{"subjectMatch": map[string]any{}, "policySelector": map[string]any{
+				"namespaceSelector": map[string]any{"matchLabels": map[string]any{"owner": "infra"}},
+				"selector":          map[string]any{"matchLabels": map[string]any{"entry": "app"}},
+			}})
+			fixture.put(model.KindPolicySet, "root", map[string]any{"bindingRefs": []any{reference("reader"), reference("apps")}})
+			fixture.observation.CollectsNamespaceLabels = true
+			fixture.observation.NamespaceLabels = map[string]map[string]string{"policies": {"owner": "infra"}, "unrelated": {"owner": "infra"}}
+			first, reused := prepare()
+			Expect(reused).To(BeFalse())
+			Expect(first.Compilation.Selections).To(HaveLen(1))
+			fixture.putLabeled(model.KindPolicySet, "unmatched", map[string]string{"helm.sh/chart": "app-1"}, map[string]any{})
+			fixture.observation.NamespaceLabels["unrelated"] = map[string]string{"owner": "other"}
+			_, reused = prepare()
+			Expect(reused).To(BeTrue())
+			fixture.putLabeled(model.KindPolicySet, "app", map[string]string{"entry": "app"}, map[string]any{})
+			_, reused = prepare()
+			Expect(reused).To(BeFalse())
+			fixture.putLabeled(model.KindPolicySet, "app", map[string]string{"entry": "app", "helm.sh/chart": "app-2"}, map[string]any{})
+			_, reused = prepare()
+			Expect(reused).To(BeTrue())
+			fixture.observation.NamespaceLabels["policies"] = map[string]string{"owner": "other"}
+			_, reused = prepare()
+			Expect(reused).To(BeFalse())
+			fixture.observation.NamespaceLabels["policies"] = map[string]string{"owner": "infra"}
+			_, reused = prepare()
+			Expect(reused).To(BeFalse())
+			fixture.putLabeled(model.KindPolicySet, "app", map[string]string{"entry": "retired"}, map[string]any{})
+			_, reused = prepare()
+			Expect(reused).To(BeFalse())
+		})
 		It("prepares a changed builtin ceiling or source allowlist", func() {
 			prepare()
 			config.BuiltinCeiling = &model.BuiltinSet{"startswith"}

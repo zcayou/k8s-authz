@@ -54,6 +54,25 @@ func (f *fixture) custom(kind, name, spec string) {
 	f.put(utils.Document(kind, "policies", name, spec))
 }
 
+// customAt puts a product document in namespace of the fixture's source.
+func (f *fixture) customAt(namespace, kind, name, spec string) {
+	f.put(utils.Document(kind, namespace, name, spec))
+}
+
+// labeledSet puts the PolicySet access, carrying labels, in namespace
+// of the fixture's source.
+func (f *fixture) labeledSet(namespace string, labels map[string]string, spec string) {
+	object := utils.Document(model.KindPolicySet, namespace, "access", spec)
+	object.SetLabels(labels)
+	f.put(object)
+}
+
+// collectNamespaceLabels makes the fixture's source collect namespace labels,
+// holding labels.
+func (f *fixture) collectNamespaceLabels(labels map[string]map[string]string) {
+	f.observation.CollectsNamespaceLabels, f.observation.NamespaceLabels = true, labels
+}
+
 // addSource adds the complete source control/name that the endpoint reads.
 func (f *fixture) addSource(name string) model.SourceKey {
 	instance := model.SourceInstance{Key: model.SourceKey{Namespace: "control", Name: name}, UID: name + "-uid", Origin: "api-" + name}

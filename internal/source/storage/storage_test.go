@@ -82,6 +82,8 @@ var _ = Describe("Source cache", func() {
 		Expect(found).To(BeTrue())
 		Expect(restored.Complete).To(BeTrue())
 		Expect(restored.Instance).To(Equal(instance))
+		Expect(restored.CollectsNamespaceLabels).To(Equal(expected.CollectsNamespaceLabels))
+		Expect(restored.NamespaceLabels).To(Equal(expected.NamespaceLabels))
 		Expect(restored.Documents).To(HaveLen(len(expected.Documents)))
 		for reference, state := range expected.Documents {
 			Expect(restored.Documents).To(HaveKey(reference))
@@ -220,6 +222,44 @@ var _ = Describe("Source cache", func() {
 			HaveField("Document", Not(BeNil())),
 			HaveField("Object", MatchJSON(state.Object)),
 		)))
+	})
+
+	It("restores namespace labels, and whether they're collected, exactly as written", func(ctx SpecContext) {
+		labeled := view("one")
+		labeled.CollectsNamespaceLabels = true
+		labeled.NamespaceLabels = map[string]map[string]string{"apps": {"owner": "infra"}, "bare": nil}
+		write(ctx, labeled)
+		expectRestored(ctx, labeled)
+		labeled.NamespaceLabels = map[string]map[string]string{}
+		write(ctx, labeled)
+		expectRestored(ctx, labeled)
+		write(ctx, view("one"))
+		expectRestored(ctx, view("one"))
+	})
+
+	It("rewrites the cache when only its namespace labels or their collection change", func(ctx SpecContext) {
+		labeled := view("one")
+		labeled.CollectsNamespaceLabels = true
+		labeled.NamespaceLabels = map[string]map[string]string{}
+		write(ctx, view("one"))
+		written := versions(ctx)
+		write(ctx, labeled)
+		Expect(versions(ctx)).NotTo(Equal(written))
+		written = versions(ctx)
+		labeled.NamespaceLabels = map[string]map[string]string{"apps": {"owner": "infra"}}
+		write(ctx, labeled)
+		Expect(versions(ctx)).NotTo(Equal(written))
+	})
+
+	It("discards chunks whose namespace-label setting their digest doesn't cover", func(ctx SpecContext) {
+		labeled := view("one")
+		labeled.CollectsNamespaceLabels = true
+		labeled.NamespaceLabels = map[string]map[string]string{"apps": {"owner": "infra"}}
+		write(ctx, labeled)
+		secret := cached(ctx)[0]
+		secret.Annotations["authorization.zctx.io/namespace-labels"] = "Ignore"
+		Expect(secrets.Update(ctx, &secret)).To(Succeed())
+		expectDiscarded(ctx)
 	})
 
 	It("discards chunks that disagree on the digest", func(ctx SpecContext) {

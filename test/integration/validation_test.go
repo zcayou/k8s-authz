@@ -134,8 +134,16 @@ var _ = Describe("Validation rules", func() {
 			ruleBinding(groupSubject+`,"policyRef":{"name":"policy"},"subjectMatch":{"requirements":[{"kind":"Group","operator":"Exists"}]}`), "exactly one of subjects or subjectMatch is required"),
 		Entry("a binding without subjects",
 			ruleBinding(`"policyRef":{"name":"policy"}`), "exactly one of subjects or subjectMatch is required"),
+		Entry("a binding with both a policyRef and a policySelector",
+			ruleBinding(groupSubject+`,"policyRef":{"name":"policy"},"policySelector":{"namespaceSelector":{},"selector":{}}`), "exactly one of policyRef or policySelector is required"),
+		Entry("a binding with neither a policyRef nor a policySelector",
+			ruleBinding(groupSubject), "exactly one of policyRef or policySelector is required"),
+		Entry("a policySelector without a selector",
+			ruleBinding(groupSubject+`,"policySelector":{"namespaceSelector":{}}`), "spec.policySelector.selector: Required value"),
+		Entry("a namespaceLabels setting other than Collect or Ignore",
+			ruleDocument("PolicySource", "source", `{"provider":{"type":"Kubernetes"},"collection":[{"kinds":["PolicySet"],"namespaces":["*"],"names":["*"]}],"namespaceLabels":"Always"}`), "spec.namespaceLabels: Unsupported value"),
 		Entry("traversal constraints on a leaf policy target",
-			ruleBinding(groupSubject+`,"policyRef":{"name":"policy"},"constraints":{"maxDepth":2}`), "constraints.sourceRefs and constraints.maxDepth require a PolicySet target"),
+			ruleBinding(groupSubject+`,"policyRef":{"name":"policy"},"constraints":{"maxDepth":2}`), "constraints.sourceRefs and constraints.maxDepth require a PolicySet target or a policySelector"),
 		Entry("a constraint policy that is a PolicySet",
 			ruleBinding(groupSubject+`,"policyRef":{"kind":"PolicySet","name":"set"},"constraints":{"policyRef":{"kind":"PolicySet","name":"other"}}`), "constraints.policyRef must target a leaf policy"),
 		Entry("a subject of an unsupported kind",
@@ -171,6 +179,15 @@ var _ = Describe("Validation rules", func() {
 				object.Spec.Endpoints[0].SourceRefs[0].Name = strings.Repeat("a", 64)
 			}), "may not be more than 63"),
 	)
+
+	It("admits traversal constraints on a selecting binding, and defaults a source to ignore namespace labels", func(ctx context.Context) {
+		Expect(createAndRemove(ctx, ruleBinding(`"subjectMatch":{},"policySelector":{"namespaceSelector":{"matchLabels":{"owner":"infra"}},"selector":{}},"constraints":{"maxDepth":2,"sourceRefs":[{"namespace":"rules","name":"local"}]}`))).To(Succeed())
+		object := collectingSource(`{"kinds":["PolicySet"],"namespaces":["*"],"names":["*"]}`)
+		Expect(createAndRemove(ctx, object)).To(Succeed())
+		var stored api.PolicySource
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(object), &stored)).To(Succeed())
+		Expect(stored.Spec.NamespaceLabels).To(Equal(api.NamespaceLabelsIgnore))
+	})
 
 	It("admits a DaemonSet service that sets only its required fields", func(ctx context.Context) {
 		object := ruleDocument("AuthorizationService", "daemonset", `{

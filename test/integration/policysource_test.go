@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	api "github.com/zcayou/k8s-authz/api/v1alpha1"
+	"github.com/zcayou/k8s-authz/internal/compiler"
 	"github.com/zcayou/k8s-authz/internal/model"
 )
 
@@ -87,6 +88,50 @@ var _ = Describe("PolicySource registration", func() {
 		fixture.cachedEventually(ctx, "workloads")
 	}, SpecTimeout(time.Minute))
 
+	It("persists its namespace labels while namespaceLabels is Collect, follows label-only changes, drops them once it's Ignore and reads them again once it's Collect", func(ctx SpecContext) {
+		fixture := newSelectionFixture(ctx)
+		fixture.synchronized(ctx)
+		cachedOwner := func(g Gomega) string {
+			collects, labels := fixture.cachedNamespaceLabels(ctx)
+			g.Expect(collects).To(BeTrue())
+			g.Expect(labels).To(HaveKey(fixture.namespace))
+			return labels[fixture.namespace]["owner"]
+		}
+		Eventually(cachedOwner).WithTimeout(convergence).Should(Equal("infra"))
+
+		labelNamespace(ctx, fixture.namespace, map[string]string{"owner": "netsec"})
+		Eventually(cachedOwner).WithTimeout(convergence).Should(Equal("netsec"))
+
+		fixture.update(ctx, func(spec *api.PolicySourceSpec) { spec.NamespaceLabels = api.NamespaceLabelsIgnore })
+		Eventually(func(g Gomega) {
+			collects, labels := fixture.cachedNamespaceLabels(ctx)
+			g.Expect(collects).To(BeFalse())
+			g.Expect(labels).To(BeEmpty())
+		}).WithTimeout(convergence).Should(Succeed())
+		fixture.synchronized(ctx)
+
+		fixture.update(ctx, func(spec *api.PolicySourceSpec) { spec.NamespaceLabels = api.NamespaceLabelsCollect })
+		Eventually(cachedOwner).WithTimeout(convergence).Should(Equal("netsec"))
+		fixture.synchronized(ctx)
+	}, SpecTimeout(time.Minute))
+
+	It("serves a selection's matches from the persisted view on a replica that has just started while its source is unreachable", func(ctx SpecContext) {
+		fixture := newSelectionFixture(ctx)
+		fixture.synchronized(ctx)
+		Eventually(func(g Gomega) {
+			_, labels := fixture.cachedNamespaceLabels(ctx)
+			g.Expect(labels).To(HaveKey(fixture.namespace))
+		}).WithTimeout(convergence).Should(Succeed())
+
+		Expect(k8sClient.Delete(ctx, fixture.secret)).To(Succeed())
+		replica := startReplica(k8sClient)
+		replica.reconcile(ctx, fixture)
+		Expect(replica.registry.Health(fixture.key()).Reason).To(Equal(api.ReasonInvalidCredential))
+		selected := compiler.Select(selection(fixture.key()), replica.registry.Snapshot(), compiler.DefaultLimits().MaxSelectionMatches)
+		Expect(selected.Reason).To(BeEmpty(), selected.Message)
+		Expect(selected.Matches).To(ConsistOf(HaveField("Name", "access")))
+	}, SpecTimeout(time.Minute))
+
 	Context("on a replica that has just started", func() {
 		var fixture *sourceFixture
 		BeforeEach(func(ctx SpecContext) {
@@ -105,14 +150,14 @@ var _ = Describe("PolicySource registration", func() {
 		}, SpecTimeout(time.Minute))
 
 		It("restores a Paused source's view without reading its kubeconfig Secret, and keeps it when unpaused", func(ctx SpecContext) {
-			fixture.setSynchronization(ctx, api.SynchronizationPaused)
+			fixture.update(ctx, func(spec *api.PolicySourceSpec) { spec.Synchronization = api.SynchronizationPaused })
 			replica := startReplica(secretGetRefused{k8sClient})
 			fixture.expectRegisteredOnlyWithView(replica.registry)
 
 			replica.reconcile(ctx, fixture)
 			fixture.expectRestored(replica.registry, api.ReasonPaused)
 
-			fixture.setSynchronization(ctx, "Active")
+			fixture.update(ctx, func(spec *api.PolicySourceSpec) { spec.Synchronization = "Active" })
 			replica.supervisor.APIReader = k8sClient
 			replica.reconcile(ctx, fixture)
 			Expect(replica.registry.Snapshot()[fixture.key()].Documents).To(HaveLen(1))

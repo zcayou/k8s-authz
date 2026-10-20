@@ -130,6 +130,17 @@ spec:
                 - Active
                 - Inert
                 type: string
+              namespaceLabels:
+                default: Ignore
+                description: |-
+                  namespaceLabels selects whether the source reads the labels
+                  of the namespaces its collection covers: every namespace when a range
+                  selects "*", otherwise each namespace a range names. A policySelector's
+                  non-empty namespaceSelector requires Collect.
+                enum:
+                - Collect
+                - Ignore
+                type: string
               provider:
                 description: provider selects and configures the acquisition provider.
                 properties:

@@ -217,6 +217,131 @@ spec:
                 - message: a reference into another source requires namespace
                   rule: '!has(self.sourceRef) || has(self.namespace) || (has(self.kind)
                     && self.kind == ''ClusterRole'')'
+              policySelector:
+                description: |-
+                  policySelector selects PolicySets by their labels and their namespaces'
+                  labels. Each match is delegated to as a policyRef to it would be.
+                properties:
+                  namespaceSelector:
+                    description: |-
+                      namespaceSelector selects the namespaces whose PolicySets may match,
+                      by the namespaces' labels in the source. An empty selector selects every
+                      namespace; any other requires the source to collect namespace labels.
+                    properties:
+                      matchExpressions:
+                        description: matchExpressions is a list of label selector
+                          requirements. The requirements are ANDed.
+                        items:
+                          description: |-
+                            A label selector requirement is a selector that contains values, a key, and an operator that
+                            relates the key and values.
+                          properties:
+                            key:
+                              description: key is the label key that the selector
+                                applies to.
+                              type: string
+                            operator:
+                              description: |-
+                                operator represents a key's relationship to a set of values.
+                                Valid operators are In, NotIn, Exists and DoesNotExist.
+                              type: string
+                            values:
+                              description: |-
+                                values is an array of string values. If the operator is In or NotIn,
+                                the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                the values array must be empty. This array is replaced during a strategic
+                                merge patch.
+                              items:
+                                type: string
+                              type: array
+                              x-kubernetes-list-type: atomic
+                          required:
+                          - key
+                          - operator
+                          type: object
+                        type: array
+                        x-kubernetes-list-type: atomic
+                      matchLabels:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                          map is equivalent to an element of matchExpressions, whose key field is "key", the
+                          operator is "In", and the values array contains only "value". The requirements are ANDed.
+                        type: object
+                    type: object
+                    x-kubernetes-map-type: atomic
+                  selector:
+                    description: selector selects PolicySets by their own labels.
+                    properties:
+                      matchExpressions:
+                        description: matchExpressions is a list of label selector
+                          requirements. The requirements are ANDed.
+                        items:
+                          description: |-
+                            A label selector requirement is a selector that contains values, a key, and an operator that
+                            relates the key and values.
+                          properties:
+                            key:
+                              description: key is the label key that the selector
+                                applies to.
+                              type: string
+                            operator:
+                              description: |-
+                                operator represents a key's relationship to a set of values.
+                                Valid operators are In, NotIn, Exists and DoesNotExist.
+                              type: string
+                            values:
+                              description: |-
+                                values is an array of string values. If the operator is In or NotIn,
+                                the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                the values array must be empty. This array is replaced during a strategic
+                                merge patch.
+                              items:
+                                type: string
+                              type: array
+                              x-kubernetes-list-type: atomic
+                          required:
+                          - key
+                          - operator
+                          type: object
+                        type: array
+                        x-kubernetes-list-type: atomic
+                      matchLabels:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                          map is equivalent to an element of matchExpressions, whose key field is "key", the
+                          operator is "In", and the values array contains only "value". The requirements are ANDed.
+                        type: object
+                    type: object
+                    x-kubernetes-map-type: atomic
+                  sourceRef:
+                    description: |-
+                      sourceRef selects another allowed PolicySource. Omission means the binding's
+                      own source.
+                    properties:
+                      name:
+                        description: name is the PolicySource name.
+                        maxLength: 63
+                        minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                        type: string
+                      namespace:
+                        description: namespace is the PolicySource namespace.
+                        maxLength: 63
+                        minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                        type: string
+                    required:
+                    - name
+                    - namespace
+                    type: object
+                required:
+                - namespaceSelector
+                - selector
+                type: object
               subjectMatch:
                 description: subjectMatch selects principals with extended fixed-form
                   predicates.
@@ -351,17 +476,18 @@ spec:
                     && size(s.namespace) > 0 && (!has(s.apiGroup) || s.apiGroup ==
                     '''')) : (!has(s.namespace) || s.namespace == '''') && (!has(s.apiGroup)
                     || s.apiGroup == ''rbac.authorization.k8s.io''))'
-            required:
-            - policyRef
             type: object
             x-kubernetes-validations:
             - message: exactly one of subjects or subjectMatch is required
               rule: has(self.subjects) != has(self.subjectMatch)
+            - message: exactly one of policyRef or policySelector is required
+              rule: has(self.policyRef) != has(self.policySelector)
             - message: constraints.sourceRefs and constraints.maxDepth require a PolicySet
-                target
+                target or a policySelector
               rule: '!has(self.constraints) || !(has(self.constraints.sourceRefs)
-                || has(self.constraints.maxDepth)) || (has(self.policyRef.kind) &&
-                self.policyRef.kind == ''PolicySet'')'
+                || has(self.constraints.maxDepth)) || has(self.policySelector) ||
+                (has(self.policyRef) && has(self.policyRef.kind) && self.policyRef.kind
+                == ''PolicySet'')'
         required:
         - spec
         type: object

@@ -3,6 +3,7 @@ package source
 import (
 	"context"
 	"errors"
+	"maps"
 	"sync"
 	"time"
 
@@ -10,13 +11,22 @@ import (
 	"github.com/zcayou/k8s-authz/internal/model"
 )
 
+// Coverage is what a source's collection covers.
+type Coverage interface {
+	// Collects reports whether the collection covers reference.
+	Collects(reference model.Reference) bool
+	// CollectsNamespaceLabels reports whether the collection reads namespace
+	// labels.
+	CollectsNamespaceLabels() bool
+	// CollectsNamespace reports whether the collection reads namespace's labels.
+	CollectsNamespace(namespace string) bool
+}
+
 // Reader acquires the documents of one source.
 type Reader interface {
 	// Run emits observations until ctx is done. It must not retain an emitted
 	// observation's maps or slices for later modification.
 	Run(ctx context.Context, emit func(model.SourceObservation))
-	// Collects reports whether the reader's collection covers reference.
-	Collects(reference model.Reference) bool
 }
 
 // Registration describes the reader a source should run.
@@ -24,6 +34,9 @@ type Registration struct {
 	// Instance identifies the documents the source serves. Its UID registers
 	// the PolicySource.
 	Instance model.SourceInstance
+	// Coverage is what the PolicySource's collection covers. The source serves
+	// no document or namespace labels beyond it, whichever reader observed them.
+	Coverage Coverage
 	// Digest identifies the reader's credential and collection. Changing
 	// it replaces the reader.
 	Digest string
@@ -84,6 +97,7 @@ type entry struct {
 	// uid is the registered PolicySource UID, empty until Apply or Pause.
 	uid         string
 	settings    Settings
+	coverage    Coverage
 	digest      string
 	runner      *runner
 	paused      bool
@@ -116,29 +130,53 @@ func (e *entry) observable() observable {
 }
 
 // discard replaces the view with an empty one for instance and reports
-// whether that changed the documents.
+// whether that changed the documents or namespace labels.
 func (e *entry) discard(instance model.SourceInstance) bool {
-	changed := e.view.Complete || len(e.view.Documents) != 0
+	changed := e.view.Complete || len(e.view.Documents) != 0 || e.view.CollectsNamespaceLabels
 	e.view = model.SourceObservation{Instance: instance}
 	e.acquisition = pending()
 	return changed
 }
 
-// narrow keeps the documents of a complete view that collects covers
-// and reports whether that changed the documents.
-func (e *entry) narrow(collects func(model.Reference) bool) bool {
+// narrow narrows a complete view to coverage, and reports whether that changed
+// its documents or namespace labels.
+func (e *entry) narrow(coverage Coverage) bool {
 	if !e.view.Complete {
 		return false
 	}
-	documents := make(map[model.Reference]model.DocumentState, len(e.view.Documents))
-	for reference, state := range e.view.Documents {
-		if collects(reference) {
+	view, changed := narrowed(e.view, coverage)
+	e.view = view
+	return changed
+}
+
+// narrowed returns observation holding only the documents and namespace labels
+// coverage covers, and whether that dropped any. A coverage that reads no
+// namespace labels drops them all. It never modifies observation's maps.
+func narrowed(observation model.SourceObservation, coverage Coverage) (model.SourceObservation, bool) {
+	documents := make(map[model.Reference]model.DocumentState, len(observation.Documents))
+	for reference, state := range observation.Documents {
+		if coverage.Collects(reference) {
 			documents[reference] = state
 		}
 	}
-	changed := len(documents) != len(e.view.Documents)
-	e.view.Documents = documents
-	return changed
+	changed := len(documents) != len(observation.Documents)
+	observation.Documents = documents
+	if !observation.CollectsNamespaceLabels {
+		return observation, changed
+	}
+	if !coverage.CollectsNamespaceLabels() {
+		observation.CollectsNamespaceLabels, observation.NamespaceLabels = false, nil
+		return observation, true
+	}
+	namespaces := make(map[string]map[string]string, len(observation.NamespaceLabels))
+	for namespace, labels := range observation.NamespaceLabels {
+		if coverage.CollectsNamespace(namespace) {
+			namespaces[namespace] = labels
+		}
+	}
+	changed = changed || len(namespaces) != len(observation.NamespaceLabels)
+	observation.NamespaceLabels = namespaces
+	return observation, changed
 }
 
 // failing reports whether acquisition failed, rather than completing or waiting
@@ -228,8 +266,8 @@ func (r *Registry) run(ctx context.Context, readers *sync.WaitGroup, run *runner
 }
 
 // Subscribe registers fn for the key of every source whose registered UID,
-// settings, health or documents change. fn must not block for long. Earlier
-// changes aren't replayed.
+// settings, health, documents or namespace labels change. fn must not block
+// for long. Earlier changes aren't replayed.
 func (r *Registry) Subscribe(fn func(model.SourceKey)) {
 	r.subscribersMu.Lock()
 	defer r.subscribersMu.Unlock()
@@ -245,14 +283,15 @@ func (r *Registry) notify(key model.SourceKey) {
 }
 
 // Apply registers the source's PolicySource UID and runs the reader reg
-// describes. It records the UID before calling build: a changed UID stops
-// the running reader and discards a view not restored for the new UID, whatever
-// build returns. It does nothing more when that reader is already running.
-// Otherwise it calls build. A build error is recorded as an InvalidCredential
-// health issue, keeps any reader of the same UID running and leaves the origin
-// unchanged. A built reader replaces the running one: a changed origin discards
-// the view, and otherwise the view is narrowed to the new reader's collection
-// and served until its first complete observation.
+// describes. It records the UID and coverage before calling build, whatever
+// build returns: a changed UID stops the running reader and discards a view not
+// restored for the new UID, and the view is narrowed to reg's coverage,
+// as is every observation accepted later. It does nothing more when that reader
+// is already running. Otherwise it calls build. A build error is recorded
+// as an InvalidCredential health issue, keeps any reader of the same UID
+// running and leaves the origin unchanged. A built reader replaces the running
+// one: a changed origin discards the view, and otherwise the view is served
+// until the new reader's first complete observation.
 func (r *Registry) Apply(reg Registration, build func() (Reader, error)) error {
 	key := reg.Instance.Key
 	r.lifecycle.Lock()
@@ -266,7 +305,8 @@ func (r *Registry) Apply(reg Registration, build func() (Reader, error)) error {
 	before := source.observable()
 	unregistered, changed := r.registerLocked(source, key, reg.Instance.UID, reg.Settings)
 	defer wait(unregistered)
-	source.paused = false
+	source.paused, source.coverage = false, reg.Coverage
+	changed = source.narrow(reg.Coverage) || changed
 	if source.runner != nil && source.digest == reg.Digest && source.view.Instance == reg.Instance {
 		source.credential = nil
 		r.settleLocked(key, source, before, changed)
@@ -292,8 +332,6 @@ func (r *Registry) Apply(reg Registration, build func() (Reader, error)) error {
 	r.mu.Lock()
 	if source.view.Instance != reg.Instance {
 		changed = source.discard(reg.Instance) || changed
-	} else {
-		changed = source.narrow(reader.Collects) || changed
 	}
 	source.digest, source.credential = reg.Digest, nil
 	run := newRunner(key, reader)
@@ -331,9 +369,9 @@ func (r *Registry) Restore(view model.SourceObservation) {
 
 // Pause registers the source's PolicySource UID and stops its reader
 // for synchronization Paused. A changed UID discards the view; otherwise
-// the view is narrowed by collects and kept. settings apply as they do
+// the view is narrowed to coverage and kept. settings apply as they do
 // for Apply. Pause never changes the view's origin.
-func (r *Registry) Pause(key model.SourceKey, uid string, settings Settings, collects func(model.Reference) bool) {
+func (r *Registry) Pause(key model.SourceKey, uid string, settings Settings, coverage Coverage) {
 	r.lifecycle.Lock()
 	defer r.lifecycle.Unlock()
 	r.mu.Lock()
@@ -347,8 +385,8 @@ func (r *Registry) Pause(key model.SourceKey, uid string, settings Settings, col
 		source.runner = nil
 	}
 	defer wait(stopped)
-	source.paused, source.credential, source.digest = true, nil, ""
-	changed = source.narrow(collects) || changed
+	source.paused, source.credential, source.digest, source.coverage = true, nil, "", coverage
+	changed = source.narrow(coverage) || changed
 	r.settleLocked(key, source, before, changed)
 }
 
@@ -507,9 +545,12 @@ func (r *Registry) accept(run *runner, observation model.SourceObservation) {
 	before := source.observable()
 	changed := false
 	if observation.Complete {
-		// A view whose documents are semantically unchanged is kept, so metadata-only
-		// updates neither notify nor rewrite the cache.
-		changed = !source.view.Complete || !sameDocuments(source.view.Documents, observation.Documents)
+		// A reader kept running because its replacement failed to build observes
+		// the collection it was built for, which may cover more than the current one.
+		observation, _ = narrowed(observation, source.coverage)
+		// A view whose documents and namespace labels are semantically unchanged
+		// is kept, so other metadata updates neither notify nor rewrite the cache.
+		changed = !source.view.Complete || !sameDocuments(source.view.Documents, observation.Documents) || !sameNamespaceLabels(source.view, observation)
 		if changed {
 			source.view = observation
 		}
@@ -526,16 +567,23 @@ func (r *Registry) accept(run *runner, observation model.SourceObservation) {
 	r.settleLocked(run.key, source, before, changed)
 }
 
-// sameDocuments compares documents by their semantic digests.
+// sameDocuments compares documents by their semantic digests and labels.
 func sameDocuments(previous, current map[model.Reference]model.DocumentState) bool {
 	if len(previous) != len(current) {
 		return false
 	}
 	for reference, state := range current {
 		earlier, found := previous[reference]
-		if !found || earlier.UID != state.UID || earlier.Digest != state.Digest {
+		if !found || earlier.UID != state.UID || earlier.Digest != state.Digest || !maps.Equal(earlier.Labels, state.Labels) {
 			return false
 		}
 	}
 	return true
+}
+
+// sameNamespaceLabels compares whether two views collect namespace labels,
+// and the labels they hold.
+func sameNamespaceLabels(previous, current model.SourceObservation) bool {
+	return previous.CollectsNamespaceLabels == current.CollectsNamespaceLabels &&
+		maps.EqualFunc(previous.NamespaceLabels, current.NamespaceLabels, maps.Equal)
 }

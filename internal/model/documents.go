@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	api "github.com/zcayou/k8s-authz/api/v1alpha1"
 )
 
@@ -90,6 +92,9 @@ const (
 	// ReasonUniversalEnvelope means a Policy's condition decides every request
 	// inside its bound.
 	ReasonUniversalEnvelope IssueReason = "UniversalEnvelope"
+	// ReasonNamespaceLabelsNotCollected means a selection's namespaceSelector
+	// needs namespace labels its source doesn't collect.
+	ReasonNamespaceLabelsNotCollected IssueReason = "NamespaceLabelsNotCollected"
 )
 
 type Issue struct {
@@ -109,11 +114,15 @@ type Issue struct {
 type DocumentState struct {
 	Key DocumentKey `json:"key"`
 	UID string      `json:"uid"`
-	// Digest covers everything the document contributes to a compilation:
-	// the normalized document and its issues.
+	// Digest covers what the document contributes to a compilation it's referenced
+	// in: the normalized document and its issues.
 	Digest   string    `json:"digest"`
 	Document *Document `json:"document,omitempty"`
 	Issues   []Issue   `json:"issues,omitempty"`
+	// Labels are a PolicySet's labels, valid or not, which selections match.
+	// Other kinds carry none. Digest doesn't cover them: they decide only
+	// what a selection matches.
+	Labels map[string]string `json:"labels,omitempty"`
 	// Object is the canonical JSON of the acquired object, without server-managed
 	// field history. It's what the persistent cache stores.
 	Object []byte `json:"-"`
@@ -146,14 +155,61 @@ type Import struct {
 	Reference  Reference `json:"reference"`
 	Namespaces []string  `json:"namespaces,omitempty"`
 }
+
+// Binding attaches its principals to Policy, or, when Selection is set
+// and Policy is zero, to each PolicySet Selection matches.
 type Binding struct {
 	Policy    Reference   `json:"policy"`
+	Selection *Selection  `json:"selection,omitempty"`
 	Principal Matcher     `json:"principal"`
 	Namespace string      `json:"namespace,omitempty"`
 	Bound     *Reference  `json:"bound,omitempty"`
 	Sources   []SourceKey `json:"sources,omitempty"`
 	MaxDepth  *int        `json:"maxDepth,omitempty"`
 }
+
+// Selection selects the PolicySets of Source whose own labels match Sets
+// and whose namespace's labels match Namespaces.
+type Selection struct {
+	Source     SourceKey     `json:"source"`
+	Namespaces LabelSelector `json:"namespaces,omitempty"`
+	Sets       LabelSelector `json:"sets,omitempty"`
+}
+
+// MatchesSet reports whether reference is a PolicySet whose labels match
+// the selection's selector, whatever its namespace's labels.
+func (s Selection) MatchesSet(reference Reference, labels map[string]string) bool {
+	return reference.Kind == KindPolicySet && reference.Group == DocumentKinds[KindPolicySet].Resource.Group && s.Sets.Matches(labels)
+}
+
+// LabelSelector is a normalized label selector: the requirements, with each
+// matchLabels entry as an In requirement, sorted with their values sorted.
+// An empty selector matches every label set.
+type LabelSelector []metav1.LabelSelectorRequirement
+
+// Matches reports whether labels satisfy every requirement, as a Kubernetes
+// label selector does.
+func (s LabelSelector) Matches(labels map[string]string) bool {
+	for _, requirement := range s {
+		value, present := labels[requirement.Key]
+		var satisfied bool
+		switch requirement.Operator {
+		case metav1.LabelSelectorOpIn:
+			satisfied = present && slices.Contains(requirement.Values, value)
+		case metav1.LabelSelectorOpNotIn:
+			satisfied = !present || !slices.Contains(requirement.Values, value)
+		case metav1.LabelSelectorOpExists:
+			satisfied = present
+		case metav1.LabelSelectorOpDoesNotExist:
+			satisfied = !present
+		}
+		if !satisfied {
+			return false
+		}
+	}
+	return true
+}
+
 type PolicySet struct {
 	Bindings     []Reference `json:"bindings"`
 	Prohibitions []Reference `json:"prohibitions"`
@@ -171,6 +227,11 @@ type SourceObservation struct {
 	// AllowedBuiltins are the builtins the source's conditions may call. Nil
 	// means the source doesn't allow Rego conditions.
 	AllowedBuiltins *BuiltinSet
+	// CollectsNamespaceLabels reports whether the source reads namespace
+	// labels. When it does, a complete observation's NamespaceLabels holds
+	// the labels of each collected namespace that exists in the source.
+	CollectsNamespaceLabels bool
+	NamespaceLabels         map[string]map[string]string
 }
 
 // Failure is why a source has no complete observation. Reason is a Synchronized

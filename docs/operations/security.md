@@ -9,7 +9,8 @@ k8s-authz decides who may do what in the clusters it serves, so its own trust bo
 | Writers of `AuthorizationService`s | Which sources and authorities an endpoint uses, which callers it admits, its fallbacks, and the engine pods' spec (including privileged settings) | RBAC on the control namespace; Pod Security Admission in it. |
 | Writers of `PolicySource`s | Which APIs and documents feed policy, and whether Rego conditions are allowed | RBAC on the control namespace. |
 | Writers of Secrets in the control namespace | Engine serving identity, trusted caller CAs, and source credentials | RBAC on the control namespace. |
-| Writers of policy documents in a source | Grants within whatever bounds the documents above them allow | RBAC in each source API, per namespace and kind. |
+| Writers of policy documents in a source | Grants within whatever bounds the documents above them allow, and, in a namespace a selection deems eligible, attaching a labeled `PolicySet` beneath it | RBAC in each source API, per namespace and kind. |
+| Writers of namespace labels in a source | Which namespaces a selection deems eligible | Admission policy on the label keys selections use. |
 | Holder of the management key | Everything every engine serves, including Rego code | Secret access in the operator namespace. |
 | Holders of caller certificates | Can ask engines for decisions as kube-apiserver would | Your PKI. |
 
@@ -39,6 +40,15 @@ Within the policy graph, a team can't exceed what it was delegated:
 
 These guarantees hold only while teams can't edit the documents that set their bounds. See [Delegation](../concepts/delegation.md).
 
+## Discovery
+
+A [selecting binding](../concepts/delegation.md#discovering-policysets) attaches whatever its selectors match, so its boundary is whoever can make something match:
+
+- **Protect the label keys.** In each source cluster, admit changes to the namespace label keys selections use only from the platform, for example with a ValidatingAdmissionPolicy that rejects other requesters' edits to those keys. Without it, anyone who can label a namespace can make it eligible.
+- **One publisher per eligible namespace.** A selection can't tell two writers of one namespace apart. Make a namespace eligible only when a single team writes its policy documents. A team that needs to grant into a shared namespace publishes its entry `PolicySet` from a namespace it owns; a document's namespace doesn't limit where it grants.
+
+Every service has one program-wide diagram limit. A program that exceeds it fails to compile as a whole, and its engines keep serving the state they have. Discovery lets publishers the tenant hasn't reviewed grow a program: each selection matches at most 256 `PolicySet`s and an authority holds at most 1024 discovered ones, and each match is limited on its own, but enough large applications can still exceed the program limit. Keep selections narrow, give large tenants their own `AuthorizationService`, and alert on `Prepared` turning `False` with reason `PreparationUnavailable`.
+
 ## Certificates and keys
 
 - **Management certificate.** Engines accept management calls only from the certificate whose Common Name matches their bootstrap identity and whose chain verifies against the management CA alone, with the `clientAuth` usage. Because the operator pushes Rego as well as data, this credential can run code in the engines, and with it make network connections from the engine pods. Keep it in the operator namespace, readable only by the operator.
@@ -48,7 +58,7 @@ These guarantees hold only while teams can't edit the documents that set their b
 
 ## Source credentials
 
-Source kubeconfigs must be self-contained, use HTTPS with verification, and use no exec plugins or file references. A reader needs only `list` and `watch` on its collection. A broader credential, such as a cluster's admin kubeconfig, works but lets the operator read more than it collects. The operator never falls back to its own identity when a source's credential fails.
+Source kubeconfigs must be self-contained, use HTTPS with verification, and use no exec plugins or file references. A reader needs only `list` and `watch` on its collection, and on Namespaces when it collects their labels. A broader credential, such as a cluster's admin kubeconfig, works but lets the operator read more than it collects. The operator never falls back to its own identity when a source's credential fails.
 
 ## Engine pods
 

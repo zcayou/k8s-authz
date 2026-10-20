@@ -14,9 +14,9 @@ import (
 
 // listed runs a reader for collection and returns the resource, namespace
 // and field selector of each list request it made.
-func listed(ctx context.Context, collection ...api.KeyRange) []string {
+func listed(ctx context.Context, collection kubernetes.Collection) []string {
 	GinkgoHelper()
-	client := fakeClient(policyCRD(true))
+	client := fakeClient(documentCRD("policies", true))
 	reader := kubernetes.NewReader(client, source, collection)
 	Eventually(run(ctx, reader)).Should(Receive())
 	var requests []string
@@ -30,7 +30,7 @@ func listed(ctx context.Context, collection ...api.KeyRange) []string {
 
 var _ = Describe("Query planning", func() {
 	It("lists each named object through its own field selector", func(ctx SpecContext) {
-		Expect(listed(ctx, collection([]string{model.KindPolicy}, []string{teamNamespace}, "a", "b"))).To(ConsistOf(
+		Expect(listed(ctx, collects(collection([]string{model.KindPolicy}, []string{teamNamespace}, "a", "b")))).To(ConsistOf(
 			"policies team metadata.name=a",
 			"policies team metadata.name=b",
 			"customresourcedefinitions  metadata.name=policies."+api.GroupVersion.Group,
@@ -38,11 +38,11 @@ var _ = Describe("Query planning", func() {
 	})
 
 	It("drops queries a broader query covers", func(ctx SpecContext) {
-		Expect(listed(ctx,
+		Expect(listed(ctx, collects(
 			collection([]string{model.KindPolicy}, []string{teamNamespace}, "a", "*"),
 			collection([]string{model.KindPolicy}, []string{"*"}, "b"),
 			collection([]string{model.KindPolicy}, []string{teamNamespace}, "b"),
-		)).To(ConsistOf(
+		))).To(ConsistOf(
 			"policies team ",
 			"policies  metadata.name=b",
 			"customresourcedefinitions  metadata.name=policies."+api.GroupVersion.Group,
@@ -50,6 +50,28 @@ var _ = Describe("Query planning", func() {
 	})
 
 	It("lists cluster-scoped kinds without a namespace and checks no CRD for native kinds", func(ctx SpecContext) {
-		Expect(listed(ctx, collection([]string{"ClusterRole"}, nil, "view"))).To(ConsistOf("clusterroles  metadata.name=view"))
+		Expect(listed(ctx, collects(collection([]string{"ClusterRole"}, nil, "view")))).To(ConsistOf("clusterroles  metadata.name=view"))
+	})
+
+	It("lists each named namespace whose labels it reads through its own field selector", func(ctx SpecContext) {
+		collection := collects(
+			collection([]string{"Role"}, []string{teamNamespace, "other"}, "*"),
+			collection([]string{"Role"}, []string{teamNamespace}, "view"),
+			collection([]string{"ClusterRole"}, nil, "view"),
+		)
+		collection.NamespaceLabels = true
+		Expect(listed(ctx, collection)).To(ConsistOf(
+			"roles team ",
+			"roles other ",
+			"clusterroles  metadata.name=view",
+			"namespaces  metadata.name=team",
+			"namespaces  metadata.name=other",
+		))
+	})
+
+	It("lists every namespace when a range selects every namespace", func(ctx SpecContext) {
+		collection := collects(collection([]string{"Role"}, []string{teamNamespace}, "*"), collection([]string{"Role"}, []string{"*"}, "view"))
+		collection.NamespaceLabels = true
+		Expect(listed(ctx, collection)).To(ConsistOf("roles team ", "roles  metadata.name=view", "namespaces  "))
 	})
 })

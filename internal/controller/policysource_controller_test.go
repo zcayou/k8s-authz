@@ -32,6 +32,7 @@ import (
 	"github.com/zcayou/k8s-authz/internal/model"
 	"github.com/zcayou/k8s-authz/internal/source"
 	"github.com/zcayou/k8s-authz/internal/source/storage"
+	"github.com/zcayou/k8s-authz/test/utils"
 )
 
 func synchronizedCondition(status api.PolicySourceStatus) *metav1.Condition {
@@ -129,7 +130,7 @@ var _ = Describe("PolicySource Controller", func() {
 	It("reports Paused without an issue", func(ctx SpecContext) {
 		object := localPolicySource("paused", "source-paused")
 		controlClient := newPolicySourceFakeClient(object)
-		registry.Pause(sourceKeyOf(object), string(object.UID), source.Settings{}, func(model.Reference) bool { return true })
+		registry.Pause(sourceKeyOf(object), string(object.UID), source.Settings{}, utils.Coverage{})
 		reconcileStatus(ctx, controlClient, object)
 
 		status := observedPolicySourceStatus(ctx, controlClient, object)
@@ -147,7 +148,7 @@ var _ = Describe("PolicySource Controller", func() {
 		controlClient := newPolicySourceFakeClient(object)
 		instance := sourceInstance(object)
 		registry.Restore(completeView(instance, "workloads"))
-		registry.Pause(sourceKeyOf(object), string(object.UID), source.Settings{}, func(model.Reference) bool { return true })
+		registry.Pause(sourceKeyOf(object), string(object.UID), source.Settings{}, utils.Coverage{})
 		reconcileStatus(ctx, controlClient, object)
 
 		Expect(observedPolicySourceStatus(ctx, controlClient, object).LastAdmittedTime.Time).To(BeTemporally("==", admitted.Time))

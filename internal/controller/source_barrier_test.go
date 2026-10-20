@@ -14,7 +14,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	api "github.com/zcayou/k8s-authz/api/v1alpha1"
-	"github.com/zcayou/k8s-authz/internal/model"
 	"github.com/zcayou/k8s-authz/internal/source"
 	"github.com/zcayou/k8s-authz/test/utils"
 )
@@ -58,7 +57,7 @@ var _ = Describe("Source registration barrier", func() {
 		})
 		reconciler := newServiceReconciler(control)
 		reconciler.Sources = registry
-		all := func(model.Reference) bool { return true }
+		all := utils.Coverage{}
 		registry.Pause(sourceKeyOf(registered), string(registered.UID), source.Settings{}, all)
 
 		Expect(reconciler.unregisteredSource(ctx, service)).To(HaveValue(Equal(client.ObjectKeyFromObject(pending))))

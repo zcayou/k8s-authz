@@ -53,9 +53,16 @@ func newSourceFixture() *sourceFixture {
 
 func (fixture *sourceFixture) put(kind, name string, spec any) {
 	GinkgoHelper()
+	fixture.putLabeled(kind, name, nil, spec)
+}
+
+func (fixture *sourceFixture) putLabeled(kind, name string, labels map[string]string, spec any) {
+	GinkgoHelper()
 	encoded, err := json.Marshal(spec)
 	Expect(err).NotTo(HaveOccurred())
-	state := validation.DecodeDocument(fixture.source, utils.Document(kind, "policies", name, string(encoded)))
+	object := utils.Document(kind, "policies", name, string(encoded))
+	object.SetLabels(labels)
+	state := validation.DecodeDocument(fixture.source, object)
 	Expect(state.Document).NotTo(BeNil(), "%s/%s: %v", kind, name, state.Issues)
 	fixture.observation.Documents[state.Key.Reference()] = state
 }

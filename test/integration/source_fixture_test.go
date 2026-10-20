@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/pem"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -84,19 +85,20 @@ func receiveComplete(observations <-chan model.SourceObservation, documents gome
 }
 
 // newReader returns a reader that reaches the API server through configuration.
-func newReader(configuration *rest.Config, instance model.SourceInstance, collection []api.KeyRange) *kubernetessource.Reader {
+func newReader(configuration *rest.Config, instance model.SourceInstance, collection kubernetessource.Collection) *kubernetessource.Reader {
 	GinkgoHelper()
 	documents, err := dynamic.NewForConfig(configuration)
 	Expect(err).NotTo(HaveOccurred())
 	return kubernetessource.NewReader(documents, instance, collection)
 }
 
-// startRegistry runs a registry until the spec ends with reader applied
-// for instance.
-func startRegistry(instance model.SourceInstance, reader source.Reader) *source.Registry {
+// startRegistry runs a registry until the spec ends with a reader of collection
+// applied for instance, which reaches the API server through configuration.
+func startRegistry(configuration *rest.Config, instance model.SourceInstance, collection kubernetessource.Collection) *source.Registry {
 	GinkgoHelper()
 	registry := source.NewRegistry()
-	Expect(registry.Apply(source.Registration{Instance: instance, Digest: "reader"}, func() (source.Reader, error) {
+	reader := newReader(configuration, instance, collection)
+	Expect(registry.Apply(source.Registration{Instance: instance, Coverage: collection, Digest: "reader"}, func() (source.Reader, error) {
 		return reader, nil
 	})).To(Succeed())
 	stop := utils.Start(registry)
@@ -177,23 +179,113 @@ func newSourceFixture(ctx context.Context, policies ...string) *sourceFixture {
 		})).To(Succeed())
 	}
 	account, _ := grantReader(ctx, namespace)
+	return registerSource(ctx, namespace, account, api.PolicySourceSpec{
+		Collection: []api.KeyRange{{Kinds: []string{model.KindPolicy}, Namespaces: []string{namespace}, Names: []string{"*"}}},
+	})
+}
+
+// newSelectionFixture is a remote source that collects the documents
+// and the labels of a namespace labeled owner=infra. Its PolicyBinding entry
+// targets the PolicySet root, whose binding applications selects the PolicySets
+// labeled entry=application in namespaces labeled owner=infra. The PolicySet
+// access is so labeled, and grants every principal get on pods.
+func newSelectionFixture(ctx context.Context) *sourceFixture {
+	GinkgoHelper()
+	namespace := newNamespace(ctx, "selection-source")
+	labelNamespace(ctx, namespace, map[string]string{"owner": "infra"})
+	createSelectionDocuments(ctx, namespace)
+	account, _ := grantReader(ctx, namespace)
+	grantSelectionReader(ctx, account)
+	return registerSource(ctx, namespace, account, api.PolicySourceSpec{
+		Collection:      []api.KeyRange{{Kinds: []string{model.KindPolicy, model.KindPolicyBinding, model.KindPolicySet}, Namespaces: []string{namespace}, Names: []string{"*"}}},
+		NamespaceLabels: api.NamespaceLabelsCollect,
+	})
+}
+
+// createSelectionDocuments creates newSelectionFixture's documents
+// in namespace.
+func createSelectionDocuments(ctx context.Context, namespace string) {
+	GinkgoHelper()
+	all := &api.SubjectMatch{}
+	for _, object := range []client.Object{
+		&api.PolicyBinding{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "entry"}, Spec: api.PolicyBindingSpec{SubjectMatch: all, PolicyRef: &api.PolicyRef{Kind: model.KindPolicySet, Name: "root"}}},
+		&api.PolicySet{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "root"}, Spec: api.PolicySetSpec{BindingRefs: []api.BindingRef{{Name: "applications"}}}},
+		&api.PolicyBinding{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "applications"}, Spec: api.PolicyBindingSpec{SubjectMatch: all, PolicySelector: &api.PolicySelector{
+			NamespaceSelector: metav1.LabelSelector{MatchLabels: map[string]string{"owner": "infra"}},
+			Selector:          metav1.LabelSelector{MatchLabels: map[string]string{"entry": "application"}},
+		}}},
+		&api.PolicySet{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "access", Labels: map[string]string{"entry": "application"}}, Spec: api.PolicySetSpec{BindingRefs: []api.BindingRef{{Name: "grant"}}}},
+		&api.PolicyBinding{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "grant"}, Spec: api.PolicyBindingSpec{SubjectMatch: all, PolicyRef: &api.PolicyRef{Name: "pods"}}},
+		&api.Policy{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "pods"}, Spec: api.PolicySpec{Include: []api.OperationRule{{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"get"}, Namespaces: []string{"*"}}}}},
+	} {
+		Expect(k8sClient.Create(ctx, object)).To(Succeed())
+	}
+}
+
+// labelNamespace replaces namespace's labels, other than the one the API
+// server sets, with labels.
+func labelNamespace(ctx context.Context, namespace string, labels map[string]string) {
+	GinkgoHelper()
+	Expect(retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var object corev1.Namespace
+		if err := k8sClient.Get(ctx, client.ObjectKey{Name: namespace}, &object); err != nil {
+			return err
+		}
+		object.Labels = maps.Clone(labels)
+		if object.Labels == nil {
+			object.Labels = map[string]string{}
+		}
+		object.Labels[corev1.LabelMetadataName] = namespace
+		return k8sClient.Update(ctx, &object)
+	})).To(Succeed())
+}
+
+// selection is the selection newSelectionFixture's binding applications
+// makes in the source key.
+func selection(key model.SourceKey) model.Selection {
+	return model.Selection{
+		Source:     key,
+		Namespaces: model.LabelSelector{{Key: "owner", Operator: metav1.LabelSelectorOpIn, Values: []string{"infra"}}},
+		Sets:       model.LabelSelector{{Key: "entry", Operator: metav1.LabelSelectorOpIn, Values: []string{"application"}}},
+	}
+}
+
+// registerSource creates a PolicySource in namespace with spec's collection
+// and settings, which reads its API with a token for account.
+func registerSource(ctx context.Context, namespace string, account types.NamespacedName, spec api.PolicySourceSpec) *sourceFixture {
+	GinkgoHelper()
 	fixture := &sourceFixture{namespace: namespace, account: account}
 	fixture.secret = &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "reader-kubeconfig"},
 		Data:       map[string][]byte{"kubeconfig": fixture.kubeconfig(ctx)},
 	}
 	Expect(k8sClient.Create(ctx, fixture.secret)).To(Succeed())
-	fixture.object = &api.PolicySource{
-		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "remote"},
-		Spec: api.PolicySourceSpec{
-			Provider: api.PolicySourceProvider{Type: "Kubernetes", Kubernetes: &api.KubernetesProvider{
-				Kubeconfig: &api.KubeconfigReference{SecretRef: api.SecretKeyRef{Name: fixture.secret.Name, Key: "kubeconfig"}},
-			}},
-			Collection: []api.KeyRange{{Kinds: []string{model.KindPolicy}, Namespaces: []string{namespace}, Names: []string{"*"}}},
-		},
-	}
+	spec.Provider = api.PolicySourceProvider{Type: "Kubernetes", Kubernetes: &api.KubernetesProvider{
+		Kubeconfig: &api.KubeconfigReference{SecretRef: api.SecretKeyRef{Name: fixture.secret.Name, Key: "kubeconfig"}},
+	}}
+	fixture.object = &api.PolicySource{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "remote"}, Spec: spec}
 	Expect(createAndRemove(ctx, fixture.object)).To(Succeed())
 	return fixture
+}
+
+// grantSelectionReader lets account also list and watch the PolicyBindings
+// and PolicySets in its namespace, and that namespace itself, by name, until
+// the spec ends.
+func grantSelectionReader(ctx context.Context, account types.NamespacedName) {
+	GinkgoHelper()
+	role := &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{Name: account.Namespace + "-selection-reader"},
+		Rules: []rbacv1.PolicyRule{
+			{APIGroups: []string{api.GroupVersion.Group}, Resources: []string{"policybindings", "policysets"}, Verbs: []string{"list", "watch"}},
+			{APIGroups: []string{""}, Resources: []string{"namespaces"}, ResourceNames: []string{account.Namespace}, Verbs: []string{"list", "watch"}},
+		},
+	}
+	Expect(createAndRemove(ctx, role)).To(Succeed())
+	Expect(createAndRemove(ctx, &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: role.Name},
+		Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Namespace: account.Namespace, Name: account.Name}},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: role.Name},
+	})).To(Succeed())
 }
 
 // grantReader creates a ServiceAccount in namespace that can list and watch
@@ -238,6 +330,15 @@ func (f *sourceFixture) instance() model.SourceInstance {
 	return model.SourceInstance{Key: f.key(), UID: string(f.object.UID), Origin: origin}
 }
 
+// cachedNamespaceLabels returns whether the source's persistent cache
+// collects namespace labels, and the labels it holds.
+func (f *sourceFixture) cachedNamespaceLabels(ctx context.Context) (bool, map[string]map[string]string) {
+	GinkgoHelper()
+	view, _, err := storage.Read(ctx, k8sClient, f.instance())
+	Expect(err).NotTo(HaveOccurred())
+	return view.CollectsNamespaceLabels, view.NamespaceLabels
+}
+
 // cached returns the names of the documents in the source's persistent cache.
 func (f *sourceFixture) cached(ctx context.Context) []string {
 	GinkgoHelper()
@@ -279,15 +380,15 @@ func (f *sourceFixture) condition(ctx context.Context) *metav1.Condition {
 	return apimeta.FindStatusCondition(f.object.Status.Conditions, api.ConditionSynchronized)
 }
 
-// setSynchronization sets the source's synchronization and waits
-// for the operator to observe it.
-func (f *sourceFixture) setSynchronization(ctx context.Context, synchronization api.Synchronization) {
+// update changes the source's spec with mutate and waits for the operator
+// to observe it.
+func (f *sourceFixture) update(ctx context.Context, mutate func(*api.PolicySourceSpec)) {
 	GinkgoHelper()
 	Expect(retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(f.object), f.object); err != nil {
 			return err
 		}
-		f.object.Spec.Synchronization = synchronization
+		mutate(&f.object.Spec)
 		return k8sClient.Update(ctx, f.object)
 	})).To(Succeed())
 	Eventually(func(g Gomega) {
@@ -348,9 +449,9 @@ func (r replica) reconcile(ctx context.Context, fixture *sourceFixture) {
 
 // policyRegistration returns a source instance and a collection of the named
 // Policies in namespace.
-func policyRegistration(name, namespace, objectName string) (model.SourceInstance, []api.KeyRange) {
+func policyRegistration(name, namespace, objectName string) (model.SourceInstance, kubernetessource.Collection) {
 	instance := model.SourceInstance{Key: model.SourceKey{Namespace: "system", Name: name}, UID: "uid-" + name, Origin: "https://test-origin"}
-	return instance, []api.KeyRange{{Kinds: []string{model.KindPolicy}, Namespaces: []string{namespace}, Names: []string{objectName}}}
+	return instance, kubernetessource.Collection{Ranges: []api.KeyRange{{Kinds: []string{model.KindPolicy}, Namespaces: []string{namespace}, Names: []string{objectName}}}}
 }
 
 // proxyConfig reaches server, trusting only its certificate. The proxy

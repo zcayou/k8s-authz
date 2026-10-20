@@ -4,6 +4,7 @@ resources:
 - authorization_v1alpha1_authorizationservice.yaml
 - authorization_v1alpha1_policy.yaml
 - authorization_v1alpha1_policybinding.yaml
+- authorization_v1alpha1_policybinding_selector.yaml
 - authorization_v1alpha1_policyset.yaml
 - authorization_v1alpha1_policy_condition.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

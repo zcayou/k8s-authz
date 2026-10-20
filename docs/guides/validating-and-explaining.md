@@ -34,6 +34,8 @@ k8s-authz validate graph control/service.yaml \
 
 - Each `--source NAMESPACE/NAME=FILE` adds a file's documents to a source. Repeat it to add several files to one source. Each source holds exactly the documents you give it.
 - `--rego-source NAMESPACE/NAME` lets that source's documents carry Rego conditions with the default builtins, and `--rego-source NAMESPACE/NAME=BUILTIN,...` with exactly the builtins listed.
+- `--namespace-labels NAMESPACE/NAME` makes that source collect namespace labels, as `namespaceLabels: Collect` does. Add the namespaces' labels as `v1` Namespace objects in that source's files.
+- Each [policy selection](../concepts/delegation.md#discovering-policysets) the compilation evaluated is listed with the `PolicySet`s it matched. A `NamespaceNotSelected` warning names each `PolicySet` the `selector` matches whose namespace the `namespaceSelector` leaves out, which answers why an application isn't attached.
 - Documents with errors are compiled as invalid, as the operator does, so you also see what they break downstream: a `MissingReference` here, an `InvalidDocument` there.
 
 This is the fastest way to review a policy change in CI, because it reports every issue the `AuthorizationService` would show in its status. Nothing needs a status writer or cluster access, so authors of remote sources can run it too.

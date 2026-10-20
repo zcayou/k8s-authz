@@ -37,16 +37,19 @@ Text output starts with `valid: N document(s)` or `invalid: N document(s)` and t
 ## validate graph
 
 ```
-k8s-authz validate graph SERVICE_FILE --source NAMESPACE/NAME=FILE... [--rego-source NAMESPACE/NAME[=BUILTIN,...]]... [-o text|json]
+k8s-authz validate graph SERVICE_FILE --source NAMESPACE/NAME=FILE... [--rego-source NAMESPACE/NAME[=BUILTIN,...]]... [--namespace-labels NAMESPACE/NAME]... [-o text|json]
 ```
 
-Compiles the one `AuthorizationService` in `SERVICE_FILE` as the operator would, against sources made of exactly the documents in their files, and reports document and graph issues.
+Compiles the one `AuthorizationService` in `SERVICE_FILE` as the operator would, against sources made of exactly the documents in their files, and reports document and graph issues. It also lists each [selection](../concepts/delegation.md#discovering-policysets) the compilation evaluated with the `PolicySet`s it matched, and warns with `NamespaceNotSelected` of each `PolicySet` a selection's `selector` matches in a namespace its `namespaceSelector` doesn't. These warnings answer why an application isn't attached; the operator doesn't report them in status.
 
 | Flag | Description |
 | --- | --- |
 | `--source` | `NAMESPACE/NAME=FILE`. Adds the file's documents to that source. Repeatable, including for the same source. |
 | `--rego-source` | `NAMESPACE/NAME` allows that source's documents to carry Rego conditions with the default builtins; `NAMESPACE/NAME=BUILTIN,...` allows exactly the listed builtins. The source must also be given with `--source`. Repeatable. |
+| `--namespace-labels` | `NAMESPACE/NAME` makes that source collect namespace labels, as `namespaceLabels: Collect` does. Its files may then hold `v1` Namespaces, whose labels are the source's namespace labels; a Namespace in any other source is an input error. The source must also be given with `--source`. Repeatable. |
 | `-o`, `--output` | `text` (default) or `json`. |
+
+Text output prints the diagnostics as `validate documents` does, then one line per selection, `selection SOURCE_NAMESPACE/SOURCE_NAME namespaces NAMESPACE_SELECTOR, PolicySets SELECTOR: N match(es)` or `...: REASON: MESSAGE` when it failed, followed by one indented `NAMESPACE/NAME` line per match. Selectors are printed as kubectl prints them, except that an empty selector, which matches everything, is `{}`. The JSON report adds `selections`, each with its `source`, `namespaceSelector`, `selector`, `matches`, and the `reason` and `message` of a failed selection.
 
 ## explain
 

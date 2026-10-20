@@ -30,6 +30,11 @@ type PolicySourceSpecApplyConfiguration struct {
 	Provider *PolicySourceProviderApplyConfiguration `json:"provider,omitempty"`
 	// collection contains the explicit ranges collected by this source.
 	Collection []KeyRangeApplyConfiguration `json:"collection,omitempty"`
+	// namespaceLabels selects whether the source reads the labels
+	// of the namespaces its collection covers: every namespace when a range
+	// selects "*", otherwise each namespace a range names. A policySelector's
+	// non-empty namespaceSelector requires Collect.
+	NamespaceLabels *apiv1alpha1.NamespaceLabels `json:"namespaceLabels,omitempty"`
 	// synchronization selects whether the source reads from its provider.
 	// Paused stops reading and keeps serving the last complete view.
 	Synchronization *apiv1alpha1.Synchronization `json:"synchronization,omitempty"`
@@ -65,6 +70,14 @@ func (b *PolicySourceSpecApplyConfiguration) WithCollection(values ...*KeyRangeA
 		}
 		b.Collection = append(b.Collection, *values[i])
 	}
+	return b
+}
+
+// WithNamespaceLabels sets the NamespaceLabels field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the NamespaceLabels field is set to the value of the last call.
+func (b *PolicySourceSpecApplyConfiguration) WithNamespaceLabels(value apiv1alpha1.NamespaceLabels) *PolicySourceSpecApplyConfiguration {
+	b.NamespaceLabels = &value
 	return b
 }
 

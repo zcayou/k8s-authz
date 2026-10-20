@@ -14,13 +14,13 @@ import (
 	"github.com/zcayou/k8s-authz/internal/source/kubernetes"
 )
 
-var everyPolicy = []api.KeyRange{{Kinds: []string{model.KindPolicy}, Namespaces: []string{teamNamespace}, Names: []string{"*"}}}
+var everyPolicy = collects(api.KeyRange{Kinds: []string{model.KindPolicy}, Namespaces: []string{teamNamespace}, Names: []string{"*"}})
 
 var _ = Describe("Reader", func() {
 	It("keeps an invalid document as an issue without failing the view", func(ctx SpecContext) {
 		invalid := allowPods()
 		invalid["surprise"] = true
-		client := fakeClient(policyCRD(true), policy("valid", allowPods()), policy("invalid", invalid))
+		client := fakeClient(documentCRD("policies", true), policy("valid", allowPods()), policy("invalid", invalid))
 		reader := kubernetes.NewReader(client, source, everyPolicy)
 		var observation model.SourceObservation
 		Eventually(run(ctx, reader)).Should(Receive(&observation))
@@ -41,7 +41,7 @@ var _ = Describe("Reader", func() {
 		applied := policy("applied", allowPods())
 		applied.SetManagedFields([]metav1.ManagedFieldsEntry{{Manager: "kubectl", Operation: metav1.ManagedFieldsOperationApply}})
 		applied.SetAnnotations(map[string]string{corev1.LastAppliedConfigAnnotation: "{}", "team": "platform"})
-		reader := kubernetes.NewReader(fakeClient(policyCRD(true), applied), source, everyPolicy)
+		reader := kubernetes.NewReader(fakeClient(documentCRD("policies", true), applied), source, everyPolicy)
 		var observation model.SourceObservation
 		Eventually(run(ctx, reader)).Should(Receive(&observation))
 		Expect(observation.Documents).To(HaveLen(1))
@@ -51,6 +51,28 @@ var _ = Describe("Reader", func() {
 			Expect(object["metadata"]).NotTo(HaveKey("managedFields"))
 			Expect(object["metadata"]).To(HaveKeyWithValue("annotations", map[string]any{"team": "platform"}))
 		}
+	})
+
+	It("observes PolicySet labels and the labels of the namespaces it collects", func(ctx SpecContext) {
+		collection := collects(api.KeyRange{Kinds: []string{model.KindPolicySet}, Namespaces: []string{teamNamespace}, Names: []string{"*"}})
+		collection.NamespaceLabels = true
+		client := fakeClient(documentCRD("policysets", true), policySet("access", map[string]any{"entrypoint": "application"}),
+			namespace(teamNamespace, map[string]any{"owner": "infrastructure"}), namespace("other", map[string]any{"owner": "netsec"}))
+		var observation model.SourceObservation
+		Eventually(run(ctx, kubernetes.NewReader(client, source, collection))).Should(Receive(&observation))
+		Expect(observation.Complete).To(BeTrue())
+		Expect(observation.CollectsNamespaceLabels).To(BeTrue())
+		Expect(observation.NamespaceLabels).To(Equal(map[string]map[string]string{teamNamespace: {"owner": "infrastructure"}}))
+		Expect(observation.Documents).To(ConsistOf(HaveField("Labels", map[string]string{"entrypoint": "application"})))
+	})
+
+	It("observes no namespace labels when its collection reads none", func(ctx SpecContext) {
+		client := fakeClient(documentCRD("policies", true), namespace(teamNamespace, map[string]any{"owner": "infrastructure"}))
+		var observation model.SourceObservation
+		Eventually(run(ctx, kubernetes.NewReader(client, source, everyPolicy))).Should(Receive(&observation))
+		Expect(observation.Complete).To(BeTrue())
+		Expect(observation.CollectsNamespaceLabels).To(BeFalse())
+		Expect(observation.NamespaceLabels).To(BeNil())
 	})
 
 	DescribeTable("reports IncompatibleSchema without admitting a view",
@@ -63,7 +85,7 @@ var _ = Describe("Reader", func() {
 			Expect(observation.Documents).To(BeEmpty())
 			Expect(observation.Failure.Reason).To(Equal(api.ReasonIncompatibleSchema))
 		},
-		Entry("when the CRD doesn't serve v1alpha1", policyCRD(false)),
+		Entry("when the CRD doesn't serve v1alpha1", documentCRD("policies", false)),
 		Entry("when the CRD is missing"),
 	)
 })

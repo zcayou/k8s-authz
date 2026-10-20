@@ -6,6 +6,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	rbacv1 "k8s.io/api/rbac/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	api "github.com/zcayou/k8s-authz/api/v1alpha1"
@@ -76,6 +77,10 @@ var _ = Describe("DecodeDocument", func() {
 		Entry("a contradictory selector", customDocument("Policy", "selector", `{"include":[{"verbs":["list"],"apiGroups":[""],"resources":["pods"],"labelSelector":{"matchLabels":{"team":"a"},"matchExpressions":[{"key":"team","operator":"DoesNotExist"}]}}]}`), "contradictory selector"),
 		Entry("a ServiceAccount subject that forges a user name", customDocument(model.KindPolicyBinding, "forged", `{"policyRef":{"name":"reader"},"subjects":[{"kind":"ServiceAccount","namespace":"tenant","name":"a:b"}]}`), "spec.subjects"),
 		Entry("constraints.sourceRefs without the target's source", customDocument(model.KindPolicyBinding, "sources", `{"policyRef":{"kind":"PolicySet","name":"access","namespace":"elastic-system","sourceRef":{"namespace":"control","name":"elk"}},"subjectMatch":{},"constraints":{"sourceRefs":[{"namespace":"control","name":"platform"}]}}`), "spec.constraints.sourceRefs"),
+		Entry("constraints.sourceRefs without the selection's source", customDocument(model.KindPolicyBinding, "selected", `{"policySelector":{"sourceRef":{"namespace":"control","name":"apps"},"namespaceSelector":{},"selector":{}},"subjectMatch":{},"constraints":{"sourceRefs":[{"namespace":"control","name":"platform"}]}}`), "spec.constraints.sourceRefs: Invalid value: must include the policySelector's source"),
+		Entry("an invalid selection label key", customDocument(model.KindPolicyBinding, "selected", `{"policySelector":{"namespaceSelector":{"matchLabels":{"-owner":"infra"}},"selector":{}},"subjectMatch":{}}`), "spec.policySelector.namespaceSelector.matchLabels"),
+		Entry("a selector with more than 64 requirements", customDocument(model.KindPolicyBinding, "selected", `{"policySelector":{"namespaceSelector":{},"selector":{"matchLabels":`+matchLabels(65)+`}},"subjectMatch":{}}`), "spec.policySelector.selector: Too many: 65"),
+		Entry("a selection operator without values", customDocument(model.KindPolicyBinding, "selected", `{"policySelector":{"namespaceSelector":{},"selector":{"matchExpressions":[{"key":"entry","operator":"In"}]}},"subjectMatch":{}}`), "spec.policySelector.selector.matchExpressions[0].values"),
 		Entry("a native ServiceAccount subject name that forges a user name", nativeDocument(model.KindRoleBinding, "native", `{"subjects":[{"kind":"ServiceAccount","name":"a:b"}],"roleRef":{"apiGroup":"rbac.authorization.k8s.io","kind":"Role","name":"reader"}}`), "subjects[0]"),
 		Entry("an unsupported kind", utils.NativeDocument("ConfigMap", "tenant", "other", `{}`), "kind: Unsupported value"),
 	)
@@ -213,6 +218,50 @@ var _ = Describe("DecodeDocument", func() {
 		Expect(state.Document.Policy.Include).To(HaveLen(1))
 		Expect(state.Document.Policy.Imports).To(ConsistOf(HaveField("Namespaces", []string{"safe", "tenant"})))
 		Expect(state.Document.Policy.Exclude).To(HaveLen(1))
+	})
+
+	It("normalizes a selection and resolves it in the declaring source", func() {
+		state := validation.DecodeDocument(tenantSource, customDocument(model.KindPolicyBinding, "apps", `{
+			"policySelector":{
+				"namespaceSelector":{"matchLabels":{"owner":"infra"},"matchExpressions":[{"key":"tier","operator":"NotIn","values":["b","a","b"]}]},
+				"selector":{"matchExpressions":[{"key":"entry","operator":"Exists"}]}
+			},
+			"subjectMatch":{},"constraints":{"maxDepth":1,"sourceRefs":[{"namespace":"control","name":"tenant-source"}]}
+		}`))
+		Expect(state.Document).NotTo(BeNil(), issueMessage(state))
+		binding := state.Document.Binding
+		Expect(binding.Policy).To(BeZero())
+		Expect(binding.Selection.Source).To(Equal(tenantSource.Key))
+		Expect(binding.Selection.Namespaces).To(ConsistOf(
+			metav1.LabelSelectorRequirement{Key: "owner", Operator: metav1.LabelSelectorOpIn, Values: []string{"infra"}},
+			metav1.LabelSelectorRequirement{Key: "tier", Operator: metav1.LabelSelectorOpNotIn, Values: []string{"a", "b"}},
+		))
+		Expect(binding.Selection.Sets).To(Equal(model.LabelSelector{{Key: "entry", Operator: metav1.LabelSelectorOpExists}}))
+		reordered := validation.DecodeDocument(tenantSource, customDocument(model.KindPolicyBinding, "apps", `{
+			"policySelector":{
+				"namespaceSelector":{"matchExpressions":[{"key":"tier","operator":"NotIn","values":["a","b"]},{"key":"owner","operator":"In","values":["infra"]}]},
+				"selector":{"matchExpressions":[{"key":"entry","operator":"Exists"}]}
+			},
+			"subjectMatch":{},"constraints":{"maxDepth":1,"sourceRefs":[{"namespace":"control","name":"tenant-source"}]}
+		}`))
+		Expect(reordered.Digest).To(Equal(state.Digest))
+		empty := validation.DecodeDocument(tenantSource, customDocument(model.KindPolicyBinding, "apps", `{"policySelector":{"sourceRef":{"namespace":"control","name":"apps"},"namespaceSelector":{},"selector":{}},"subjectMatch":{}}`))
+		Expect(empty.Document).NotTo(BeNil(), issueMessage(empty))
+		Expect(empty.Document.Binding.Selection).To(Equal(&model.Selection{Source: model.SourceKey{Namespace: "control", Name: "apps"}}))
+	})
+
+	It("keeps a PolicySet's labels, valid or not, outside its digest", func() {
+		labeled := customDocument(model.KindPolicySet, "access", `{}`)
+		labeled.SetLabels(map[string]string{"entry": "app"})
+		state := validation.DecodeDocument(tenantSource, labeled)
+		Expect(state.Labels).To(Equal(map[string]string{"entry": "app"}))
+		Expect(state.Digest).To(Equal(validation.DecodeDocument(tenantSource, customDocument(model.KindPolicySet, "access", `{}`)).Digest))
+		invalid := customDocument(model.KindPolicySet, "access", `{"surprise":true}`)
+		invalid.SetLabels(map[string]string{"entry": "app"})
+		Expect(validation.DecodeDocument(tenantSource, invalid)).To(SatisfyAll(HaveField("Document", BeNil()), HaveField("Labels", map[string]string{"entry": "app"})))
+		policy := customDocument(model.KindPolicy, "reader", `{"include":[]}`)
+		policy.SetLabels(map[string]string{"entry": "app"})
+		Expect(validation.DecodeDocument(tenantSource, policy).Labels).To(BeNil())
 	})
 
 	It("resolves a bound in the declaring source and namespace", func() {

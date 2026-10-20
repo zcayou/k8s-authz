@@ -25,7 +25,7 @@ var _ = Describe("Registry", func() {
 	})
 
 	It("starts a reader applied before Start once Start runs", func() {
-		reader := utils.NewFakeReader(nil)
+		reader := utils.NewFakeReader()
 		Expect(registry.Apply(registration(local, "one"), builds(reader))).To(Succeed())
 		Consistently(reader.Emitters()).ShouldNot(Receive())
 		startRegistry(registry)
@@ -41,17 +41,17 @@ var _ = Describe("Registry", func() {
 
 	It("stops every reader when Start's context ends and refuses later registrations", func() {
 		stop := startRegistry(registry)
-		reader := utils.NewFakeReader(nil)
+		reader := utils.NewFakeReader()
 		Expect(registry.Apply(registration(local, "one"), builds(reader))).To(Succeed())
 		emitter(reader)
 		stop()
 		Expect(reader.Stopped()).To(BeClosed())
-		Expect(registry.Apply(registration(local, "two"), builds(utils.NewFakeReader(nil)))).To(MatchError("source registry is stopped"))
+		Expect(registry.Apply(registration(local, "two"), builds(utils.NewFakeReader()))).To(MatchError("source registry is stopped"))
 	})
 
 	It("keeps a reader whose registration is current", func() {
 		startRegistry(registry)
-		reader := utils.NewFakeReader(nil)
+		reader := utils.NewFakeReader()
 		Expect(registry.Apply(registration(local, "one"), builds(reader))).To(Succeed())
 		emitter(reader)
 		Expect(registry.Apply(registration(local, "one"), func() (source.Reader, error) {
@@ -61,14 +61,15 @@ var _ = Describe("Registry", func() {
 		Expect(reader.Stopped()).NotTo(BeClosed())
 	})
 
-	It("narrows the view to a replacement reader's collection and serves it until that reader completes", func() {
+	It("narrows the view to a narrowed collection and serves it until the replacement reader completes", func() {
 		startRegistry(registry)
-		first := utils.NewFakeReader(nil)
+		first := utils.NewFakeReader()
 		Expect(registry.Apply(registration(local, "one"), builds(first))).To(Succeed())
 		emitter(first)(complete(local, "kept", "dropped"))
 
-		second := utils.NewFakeReader(func(reference model.Reference) bool { return reference.Name == "kept" })
-		Expect(registry.Apply(registration(local, "two"), builds(second))).To(Succeed())
+		second := utils.NewFakeReader()
+		withoutDropped := utils.Coverage{Documents: func(reference model.Reference) bool { return reference.Name != "dropped" }}
+		Expect(registry.Apply(covered(local, "two", withoutDropped), builds(second))).To(Succeed())
 		Expect(first.Stopped()).To(BeClosed())
 		emit := emitter(second)
 		view := registry.Effective(local.Key)
@@ -82,12 +83,12 @@ var _ = Describe("Registry", func() {
 
 	It("discards the view when a built reader reads another origin", func() {
 		startRegistry(registry)
-		first := utils.NewFakeReader(nil)
+		first := utils.NewFakeReader()
 		Expect(registry.Apply(registration(local, "one"), builds(first))).To(Succeed())
 		emitter(first)(complete(local, "a"))
 
 		moved := instance("local", "https://elsewhere.example")
-		Expect(registry.Apply(registration(moved, "one"), builds(utils.NewFakeReader(nil)))).To(Succeed())
+		Expect(registry.Apply(registration(moved, "one"), builds(utils.NewFakeReader()))).To(Succeed())
 		view := registry.Effective(local.Key)
 		Expect(view.Complete).To(BeFalse())
 		Expect(view.Documents).To(BeEmpty())
@@ -97,7 +98,7 @@ var _ = Describe("Registry", func() {
 
 	It("records a build failure as a credential issue and keeps the running reader", func() {
 		startRegistry(registry)
-		reader := utils.NewFakeReader(nil)
+		reader := utils.NewFakeReader()
 		Expect(registry.Apply(registration(local, "one"), builds(reader))).To(Succeed())
 		emitter(reader)(complete(local, "a"))
 
@@ -113,14 +114,37 @@ var _ = Describe("Registry", func() {
 		))
 		Expect(registry.Snapshot()[local.Key].Documents).To(HaveLen(1))
 
-		Expect(registry.Apply(registration(local, "one"), builds(utils.NewFakeReader(nil)))).To(Succeed())
+		Expect(registry.Apply(registration(local, "one"), builds(utils.NewFakeReader()))).To(Succeed())
 		health = registry.Health(local.Key)
 		Expect(health.Complete).To(BeTrue())
 	})
 
+	It("narrows the view at once to a narrowed collection whose reader fails to build, and narrows what the running reader still observes", func() {
+		startRegistry(registry)
+		reader := utils.NewFakeReader()
+		Expect(registry.Apply(covered(local, "one", everyNamespace), builds(reader))).To(Succeed())
+		emit := emitter(reader)
+		emit(labeled(complete(local, "kept", "dropped"), map[string]map[string]string{"apps": {"owner": "infra"}}))
+
+		Expect(registry.Apply(covered(local, "two", keptOnly), func() (source.Reader, error) {
+			return nil, errors.New("kubeconfig Secret is missing")
+		})).To(Succeed())
+		Expect(reader.Stopped()).NotTo(BeClosed())
+		Expect(registry.Health(local.Key).Reason).To(Equal(api.ReasonInvalidCredential))
+		view := registry.Snapshot()[local.Key]
+		Expect(view.Documents).To(ConsistOf(HaveField("Digest", "kept")))
+		Expect(view.CollectsNamespaceLabels).To(BeFalse())
+		Expect(view.NamespaceLabels).To(BeNil())
+
+		emit(labeled(complete(local, "kept", "dropped", "added"), map[string]map[string]string{"apps": {"owner": "netsec"}}))
+		view = registry.Snapshot()[local.Key]
+		Expect(view.Documents).To(ConsistOf(HaveField("Digest", "kept")))
+		Expect(view.CollectsNamespaceLabels).To(BeFalse())
+	})
+
 	It("retains the view while acquisition fails and admits the recovery", func() {
 		startRegistry(registry)
-		reader := utils.NewFakeReader(nil)
+		reader := utils.NewFakeReader()
 		Expect(registry.Apply(registration(local, "one"), builds(reader))).To(Succeed())
 		emit := emitter(reader)
 		emit(complete(local, "a"))
@@ -138,7 +162,7 @@ var _ = Describe("Registry", func() {
 	It("notifies only observations that change documents or health", func() {
 		startRegistry(registry)
 		keys := notifications(registry)
-		reader := utils.NewFakeReader(nil)
+		reader := utils.NewFakeReader()
 		Expect(registry.Apply(registration(local, "one"), builds(reader))).To(Succeed())
 		Eventually(keys).Should(Receive(Equal(local.Key)))
 		emit := emitter(reader)
@@ -152,10 +176,75 @@ var _ = Describe("Registry", func() {
 		Expect(keys).NotTo(Receive())
 	})
 
+	It("notifies label-only changes to documents", func() {
+		startRegistry(registry)
+		keys := notifications(registry)
+		reader := utils.NewFakeReader()
+		Expect(registry.Apply(registration(local, "one"), builds(reader))).To(Succeed())
+		Eventually(keys).Should(Receive(Equal(local.Key)))
+		emit := emitter(reader)
+		observation := complete(local, "a")
+		emit(observation)
+		Expect(keys).To(Receive(Equal(local.Key)))
+		relabeled := complete(local, "a")
+		state := relabeled.Documents[reference(local.Key, "a")]
+		state.Labels = map[string]string{"entry": "app"}
+		relabeled.Documents[reference(local.Key, "a")] = state
+		emit(relabeled)
+		Expect(keys).To(Receive(Equal(local.Key)))
+		Expect(registry.Snapshot()[local.Key].Documents[reference(local.Key, "a")].Labels).To(Equal(map[string]string{"entry": "app"}))
+		emit(observation)
+		Expect(keys).To(Receive(Equal(local.Key)))
+	})
+
+	It("notifies changes to namespace labels and to whether they're collected", func() {
+		startRegistry(registry)
+		keys := notifications(registry)
+		reader := utils.NewFakeReader()
+		Expect(registry.Apply(covered(local, "one", everyNamespace), builds(reader))).To(Succeed())
+		Eventually(keys).Should(Receive(Equal(local.Key)))
+		emit := emitter(reader)
+		emit(labeled(complete(local, "a"), map[string]map[string]string{"apps": {"owner": "infra"}}))
+		Expect(keys).To(Receive(Equal(local.Key)))
+		emit(labeled(complete(local, "a"), map[string]map[string]string{"apps": {"owner": "infra"}}))
+		Expect(keys).NotTo(Receive())
+		emit(labeled(complete(local, "a"), map[string]map[string]string{"apps": {"owner": "netsec"}}))
+		Expect(keys).To(Receive(Equal(local.Key)))
+		Expect(registry.Snapshot()[local.Key].NamespaceLabels).To(Equal(map[string]map[string]string{"apps": {"owner": "netsec"}}))
+		emit(labeled(complete(local, "a"), map[string]map[string]string{}))
+		Expect(keys).To(Receive(Equal(local.Key)))
+		emit(complete(local, "a"))
+		Expect(keys).To(Receive(Equal(local.Key)))
+		Expect(registry.Snapshot()[local.Key].CollectsNamespaceLabels).To(BeFalse())
+	})
+
+	It("narrows namespace labels to a narrowed collection, and drops them for one that reads none", func() {
+		startRegistry(registry)
+		first := utils.NewFakeReader()
+		Expect(registry.Apply(covered(local, "one", everyNamespace), builds(first))).To(Succeed())
+		emitter(first)(labeled(complete(local, "a"), map[string]map[string]string{"kept": {"owner": "infra"}, "dropped": {"owner": "infra"}}))
+
+		second := utils.NewFakeReader()
+		keptNamespace := utils.Coverage{Namespaces: func(namespace string) bool { return namespace == "kept" }}
+		Expect(registry.Apply(covered(local, "two", keptNamespace), builds(second))).To(Succeed())
+		emitter(second)
+		view := registry.Effective(local.Key)
+		Expect(view.CollectsNamespaceLabels).To(BeTrue())
+		Expect(view.NamespaceLabels).To(Equal(map[string]map[string]string{"kept": {"owner": "infra"}}))
+
+		third := utils.NewFakeReader()
+		Expect(registry.Apply(registration(local, "three"), builds(third))).To(Succeed())
+		emitter(third)
+		view = registry.Effective(local.Key)
+		Expect(view.Complete).To(BeTrue())
+		Expect(view.CollectsNamespaceLabels).To(BeFalse())
+		Expect(view.NamespaceLabels).To(BeNil())
+	})
+
 	It("toggles contribution without replacing the reader", func() {
 		startRegistry(registry)
 		keys := notifications(registry)
-		reader := utils.NewFakeReader(nil)
+		reader := utils.NewFakeReader()
 		Expect(registry.Apply(registration(local, "one"), builds(reader))).To(Succeed())
 		emitter(reader)(complete(local, "a"))
 		Eventually(keys).Should(HaveLen(2))
@@ -165,7 +254,7 @@ var _ = Describe("Registry", func() {
 
 		inert := registration(local, "one")
 		inert.Settings.Contribution = api.ContributionInert
-		Expect(registry.Apply(inert, builds(utils.NewFakeReader(nil)))).To(Succeed())
+		Expect(registry.Apply(inert, builds(utils.NewFakeReader()))).To(Succeed())
 		Expect(keys).To(Receive(Equal(local.Key)))
 		snapshot := registry.Snapshot()[local.Key]
 		Expect(snapshot.Complete).To(BeFalse())
@@ -174,7 +263,7 @@ var _ = Describe("Registry", func() {
 		view := registry.Effective(local.Key)
 		Expect(view.Documents).To(HaveLen(1))
 
-		Expect(registry.Apply(registration(local, "one"), builds(utils.NewFakeReader(nil)))).To(Succeed())
+		Expect(registry.Apply(registration(local, "one"), builds(utils.NewFakeReader()))).To(Succeed())
 		Expect(registry.Snapshot()[local.Key].Documents).To(HaveLen(1))
 		Expect(reader.Stopped()).NotTo(BeClosed())
 	})
@@ -182,7 +271,7 @@ var _ = Describe("Registry", func() {
 	It("carries allowed builtins on a complete view without replacing the reader", func() {
 		startRegistry(registry)
 		keys := notifications(registry)
-		reader := utils.NewFakeReader(nil)
+		reader := utils.NewFakeReader()
 		Expect(registry.Apply(registration(local, "one"), builds(reader))).To(Succeed())
 		emitter(reader)(complete(local, "a"))
 		Eventually(keys).Should(HaveLen(2))
@@ -193,18 +282,18 @@ var _ = Describe("Registry", func() {
 
 		rego := registration(local, "one")
 		rego.Settings.AllowedBuiltins = new(model.NewBuiltinSet([]string{"startswith"}))
-		Expect(registry.Apply(rego, builds(utils.NewFakeReader(nil)))).To(Succeed())
+		Expect(registry.Apply(rego, builds(utils.NewFakeReader()))).To(Succeed())
 		Expect(keys).To(Receive(Equal(local.Key)))
 		Expect(registry.Snapshot()[local.Key].AllowedBuiltins).To(HaveValue(Equal(model.BuiltinSet{"startswith"})))
 		Expect(registry.Effective(local.Key).AllowedBuiltins).To(BeNil())
 
 		same := registration(local, "one")
 		same.Settings.AllowedBuiltins = new(model.NewBuiltinSet([]string{"startswith"}))
-		Expect(registry.Apply(same, builds(utils.NewFakeReader(nil)))).To(Succeed())
+		Expect(registry.Apply(same, builds(utils.NewFakeReader()))).To(Succeed())
 		Expect(keys).NotTo(Receive())
 
 		same.Settings.Contribution = api.ContributionInert
-		Expect(registry.Apply(same, builds(utils.NewFakeReader(nil)))).To(Succeed())
+		Expect(registry.Apply(same, builds(utils.NewFakeReader()))).To(Succeed())
 		Expect(keys).To(Receive(Equal(local.Key)))
 		Expect(registry.Snapshot()[local.Key].AllowedBuiltins).To(BeNil())
 		Expect(reader.Stopped()).NotTo(BeClosed())
@@ -214,7 +303,7 @@ var _ = Describe("Registry", func() {
 		startRegistry(registry)
 		registry.Restore(complete(local, "cached"))
 		Expect(registry.Snapshot()).NotTo(HaveKey(local.Key), "a restored source contributes once registered")
-		reader := utils.NewFakeReader(nil)
+		reader := utils.NewFakeReader()
 		Expect(registry.Apply(registration(local, "one"), builds(reader))).To(Succeed())
 		emit := emitter(reader)
 		Expect(registry.Snapshot()[local.Key].Documents).To(HaveKey(reference(local.Key, "cached")))
@@ -229,17 +318,17 @@ var _ = Describe("Registry", func() {
 
 	It("pauses a reader and keeps its view until synchronization resumes", func() {
 		startRegistry(registry)
-		reader := utils.NewFakeReader(nil)
+		reader := utils.NewFakeReader()
 		Expect(registry.Apply(registration(local, "one"), builds(reader))).To(Succeed())
 		emitter(reader)(complete(local, "a"))
 
-		registry.Pause(local.Key, local.UID, source.Settings{}, reader.Collects)
+		registry.Pause(local.Key, local.UID, source.Settings{}, utils.Coverage{})
 		Expect(reader.Stopped()).To(BeClosed())
 		health := registry.Health(local.Key)
 		Expect(health.Reason).To(Equal(api.ReasonPaused))
 		Expect(registry.Snapshot()[local.Key].Documents).To(HaveLen(1))
 
-		resumed := utils.NewFakeReader(nil)
+		resumed := utils.NewFakeReader()
 		Expect(registry.Apply(registration(local, "one"), builds(resumed))).To(Succeed())
 		emitter(resumed)
 		Expect(registry.Snapshot()[local.Key].Documents).To(HaveLen(1))
@@ -247,7 +336,7 @@ var _ = Describe("Registry", func() {
 
 	It("removes a source with its reader and view", func() {
 		startRegistry(registry)
-		reader := utils.NewFakeReader(nil)
+		reader := utils.NewFakeReader()
 		Expect(registry.Apply(registration(local, "one"), builds(reader))).To(Succeed())
 		emit := emitter(reader)
 		registry.Remove(local.Key)
@@ -261,7 +350,7 @@ var _ = Describe("Registry", func() {
 
 	It("snapshots a source without a complete view with only the reason that keeps it incomplete", func() {
 		startRegistry(registry)
-		reader := utils.NewFakeReader(nil)
+		reader := utils.NewFakeReader()
 		Expect(registry.Apply(registration(local, "one"), builds(reader))).To(Succeed())
 		Expect(registry.Snapshot()[local.Key]).To(SatisfyAll(
 			HaveField("Complete", BeFalse()),
@@ -278,7 +367,7 @@ var _ = Describe("Registry", func() {
 
 	It("counts each time acquisition starts failing", func() {
 		startRegistry(registry)
-		reader := utils.NewFakeReader(nil)
+		reader := utils.NewFakeReader()
 		Expect(registry.Apply(registration(local, "one"), builds(reader))).To(Succeed())
 		emit := emitter(reader)
 		before := acquisitionFailures(local.Key)
@@ -319,7 +408,7 @@ var _ = Describe("Registry", func() {
 
 		It("stops the old reader and discards the view when the UID changes, even when the build fails", func() {
 			startRegistry(registry)
-			reader := utils.NewFakeReader(nil)
+			reader := utils.NewFakeReader()
 			Expect(registry.Apply(registration(local, "one"), builds(reader))).To(Succeed())
 			emitter(reader)(complete(local, "a"))
 
@@ -350,7 +439,7 @@ var _ = Describe("Registry", func() {
 			Expect(view.Documents).To(HaveKey(reference(local.Key, "cached")))
 
 			moved := instance("local", "https://elsewhere.example")
-			reader := utils.NewFakeReader(nil)
+			reader := utils.NewFakeReader()
 			Expect(registry.Apply(registration(moved, "fixed"), builds(reader))).To(Succeed())
 			emitter(reader)
 			view = registry.Snapshot()[local.Key]
@@ -369,13 +458,13 @@ var _ = Describe("Registry", func() {
 			uid, _ := registry.Registered(local.Key)
 			Expect(uid).To(Equal(local.UID))
 
-			registry.Pause(local.Key, recreated.UID, source.Settings{}, func(model.Reference) bool { return true })
+			registry.Pause(local.Key, recreated.UID, source.Settings{}, utils.Coverage{})
 			Expect(registry.Snapshot()[local.Key].Documents).To(HaveKey(reference(local.Key, "cached")))
 		})
 
 		It("discards a view the replaced UID's reader admits after a restore for the new UID", func() {
 			startRegistry(registry)
-			reader := utils.NewFakeReader(nil)
+			reader := utils.NewFakeReader()
 			Expect(registry.Apply(registration(local, "one"), builds(reader))).To(Succeed())
 			emit := emitter(reader)
 			recreated := local
@@ -383,28 +472,38 @@ var _ = Describe("Registry", func() {
 			registry.Restore(complete(recreated, "cached"))
 			emit(complete(local, "former"))
 
-			registry.Pause(local.Key, recreated.UID, source.Settings{}, func(model.Reference) bool { return true })
+			registry.Pause(local.Key, recreated.UID, source.Settings{}, utils.Coverage{})
 			Expect(registry.Snapshot()[local.Key].Documents).To(BeEmpty())
 		})
 
 		It("narrows a paused view to a narrowed collection and discards it for another UID", func() {
 			startRegistry(registry)
 			registry.Restore(complete(local, "kept", "dropped"))
-			registry.Pause(local.Key, local.UID, source.Settings{}, func(reference model.Reference) bool { return reference.Name == "kept" })
+			registry.Pause(local.Key, local.UID, source.Settings{}, keptOnly)
 			view := registry.Snapshot()[local.Key]
 			Expect(view.Complete).To(BeTrue())
 			Expect(view.Documents).To(ConsistOf(HaveField("Digest", "kept")))
 			Expect(registry.Health(local.Key).Reason).To(Equal(api.ReasonPaused))
 
-			registry.Pause(local.Key, "recreated-uid", source.Settings{}, func(model.Reference) bool { return true })
+			registry.Pause(local.Key, "recreated-uid", source.Settings{}, utils.Coverage{})
 			Expect(registry.Snapshot()[local.Key].Documents).To(BeEmpty())
+		})
+
+		It("drops a paused view's namespace labels for a collection that reads none", func() {
+			startRegistry(registry)
+			registry.Restore(labeled(complete(local, "kept"), map[string]map[string]string{"apps": {"owner": "infra"}}))
+			registry.Pause(local.Key, local.UID, source.Settings{}, utils.Coverage{})
+			view := registry.Snapshot()[local.Key]
+			Expect(view.Documents).To(HaveLen(1))
+			Expect(view.CollectsNamespaceLabels).To(BeFalse())
+			Expect(view.NamespaceLabels).To(BeNil())
 		})
 
 		It("keeps a paused view when synchronization resumes", func() {
 			startRegistry(registry)
 			registry.Restore(complete(local, "cached"))
-			registry.Pause(local.Key, local.UID, source.Settings{}, func(model.Reference) bool { return true })
-			reader := utils.NewFakeReader(nil)
+			registry.Pause(local.Key, local.UID, source.Settings{}, utils.Coverage{})
+			reader := utils.NewFakeReader()
 			Expect(registry.Apply(registration(local, "one"), builds(reader))).To(Succeed())
 			emitter(reader)
 			Expect(registry.Snapshot()[local.Key].Documents).To(HaveKey(reference(local.Key, "cached")))

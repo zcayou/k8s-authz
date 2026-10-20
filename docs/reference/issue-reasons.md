@@ -17,7 +17,7 @@ Issues appear in `AuthorizationService` and `PolicySource` status and in `k8s-au
 | --- | --- |
 | `MissingReference` | A referenced document doesn't exist in the source's view: it's absent, or outside the source's collection. |
 | `InvalidDocument` | A referenced document exists but is invalid. The document's own `Invalid` issue says why. |
-| `KindMismatch` | A reference points at the wrong kind of document, for example an entry that isn't a binding, a root that isn't a `PolicySet`, or a prohibition that targets a `PolicySet`. |
+| `KindMismatch` | A reference points at the wrong kind of document, for example an entry that isn't a binding, a root that isn't a `PolicySet`, or a prohibition that targets a `PolicySet`. An entry or prohibition binding with a `policySelector` is one too. |
 | `SourceUnavailable` | The referenced source isn't registered, hasn't completed its first read, or is `Inert`. The message names the source's state. |
 | `SourceNotAllowed` | The referenced document's source is outside the set this use may read. |
 | `InvalidSourceRestriction` | A binding's `constraints.sourceRefs` names a source it didn't itself receive. |
@@ -27,8 +27,9 @@ Issues appear in `AuthorizationService` and `PolicySource` status and in `k8s-au
 | `RegoNotAllowed` | A Policy carries a Rego condition, but its source, or a source on its path, doesn't allow conditions. |
 | `BuiltinNotAllowed` | A condition calls builtins its path or the service doesn't allow. The message lists them. |
 | `ConditionalProhibition` | A prohibition would carry a Rego condition, from its Policy or a bound. |
-| `ResourceLimitExceeded` | A branch of the graph exceeded a compilation limit. |
-| `GrantsNotComposed` | An authority's grants exceed the composition [limits](../guides/writing-policies.md#limits), so each root binding's grants cover a request only on their own. A broad request the bindings cover only together isn't granted. |
+| `NamespaceLabelsNotCollected` | A `policySelector`'s `namespaceSelector` isn't empty, but its source doesn't collect namespace labels. |
+| `ResourceLimitExceeded` | A branch of the graph exceeded a compilation limit, a selection matched more than 256 `PolicySet`s, or an authority's selections more than 1024. |
+| `GrantsNotComposed` | An authority's grants exceed the composition [limits](../guides/writing-policies.md#limits), so the grants of each root binding and each discovered `PolicySet` cover a request only on their own. A broad request they cover only together isn't granted. |
 | `InternalError` | The compiler failed in a way no document explains. Please report it. |
 
 ## CLI-only reasons
@@ -41,9 +42,10 @@ Issues appear in `AuthorizationService` and `PolicySource` status and in `k8s-au
 | `UnsupportedDocument` | A document's `apiVersion` and `kind` aren't ones the command validates. |
 | `SourceRequired` | A policy or RBAC document was given without `--source`. |
 | `DuplicateDocument` | A source holds two documents with the same kind, namespace, and name. |
-| `InvalidGraphInput` | The service file doesn't hold exactly one `AuthorizationService`. |
+| `InvalidGraphInput` | The service file doesn't hold exactly one `AuthorizationService`, or a source file holds a Namespace for a source `--namespace-labels` doesn't name. |
 | `CompilationFailed` | The whole program couldn't be compiled, for example because it exceeds the overall size limit. |
 | `DiagnosticsTruncated` | The compiler kept only part of its diagnostics. |
+| `NamespaceNotSelected` | Warning. A `PolicySet` matches a selection's `selector`, but its namespace's labels weren't given or don't match the `namespaceSelector`. |
 
 ## Condition reasons
 

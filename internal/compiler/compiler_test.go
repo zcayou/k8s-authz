@@ -15,6 +15,7 @@ import (
 	"github.com/zcayou/k8s-authz/internal/compiler"
 	"github.com/zcayou/k8s-authz/internal/condition"
 	"github.com/zcayou/k8s-authz/internal/model"
+	"github.com/zcayou/k8s-authz/internal/validation"
 	"github.com/zcayou/k8s-authz/test/utils"
 )
 
@@ -668,5 +669,179 @@ var _ = Describe("Rego conditions", func() {
 		Expect(conditionIDs(compiled.Prepared)).To(ConsistOf(HaveLen(1)))
 		Expect(decide(ctx, compiled.Prepared, "get", "pods", "one", "team-a").Result).To(Equal(model.Result("Allow")))
 		Expect(decide(ctx, compiled.Prepared, "get", "pods", "one", "alice").Result).To(Equal(model.Result("NoOpinion")))
+	})
+})
+
+var _ = Describe("Policy discovery", func() {
+	var f *fixture
+	key := func(namespace, kind, name string) model.DocumentKey {
+		return model.DocumentKey{Source: f.source, Group: api.GroupVersion.Group, Kind: kind, Namespace: namespace, Name: name}
+	}
+	// app publishes an entry PolicySet in namespace that grants user every
+	// operation.
+	app := func(namespace, user string) {
+		f.customAt(namespace, model.KindPolicyBinding, "grant", fmt.Sprintf(`{"policyRef":{"name":"all","namespace":"policies"},"subjects":[{"kind":"User","name":%q}]}`, user))
+		f.labeledSet(namespace, map[string]string{"entry": "app"}, `{"bindingRefs":[{"name":"grant"}]}`)
+	}
+	BeforeEach(func() {
+		f = newFixture()
+		f.custom(model.KindPolicy, "all", `{"include":[{"apiGroups":["*"],"resources":["*"],"verbs":["*"]}]}`)
+		f.custom(model.KindPolicy, "ceiling", `{"include":[{"apiGroups":[""],"resources":["pods"],"verbs":["*"]}]}`)
+		f.custom(model.KindPolicyBinding, "apps", `{"subjectMatch":{},"policySelector":{"namespaceSelector":{"matchLabels":{"owner":"infra"}},"selector":{"matchLabels":{"entry":"app"}}},"constraints":{"policyRef":{"name":"ceiling"}}}`)
+		f.custom(model.KindPolicySet, "root", `{"bindingRefs":[{"name":"apps"}]}`)
+		app("app-a", "alice")
+		app("app-b", "bob")
+		app("other", "carol")
+		f.collectNamespaceLabels(map[string]map[string]string{"app-a": {"owner": "infra"}, "app-b": {"owner": "infra"}, "other": {"owner": "netsec"}})
+	})
+
+	It("delegates to each match under the selecting binding's bound, attributing each grant to its path", func(ctx SpecContext) {
+		compiled := f.compile()
+		Expect(compiled.Diagnostics).To(BeEmpty())
+		Expect(compiled.Selections).To(HaveLen(1))
+		Expect(decide(ctx, compiled.Prepared, "get", "pods", "app-a", "alice").Result).To(Equal(model.Result("Allow")))
+		Expect(decide(ctx, compiled.Prepared, "get", "secrets", "app-a", "alice").Result).To(Equal(model.Result("NoOpinion")))
+		Expect(decide(ctx, compiled.Prepared, "get", "pods", "app-b", "bob").Result).To(Equal(model.Result("Allow")))
+		Expect(decide(ctx, compiled.Prepared, "get", "pods", "other", "carol").Result).To(Equal(model.Result("NoOpinion")))
+		Expect(compiled.Prepared.Contributions).To(ContainElement(HaveField("Path", Equal([]model.DocumentKey{
+			key("policies", model.KindPolicyBinding, "entry"), key("policies", model.KindPolicySet, "root"), key("policies", model.KindPolicyBinding, "apps"),
+			key("app-a", model.KindPolicySet, "access"), key("app-a", model.KindPolicyBinding, "grant"), key("policies", model.KindPolicy, "all"),
+		}))))
+	})
+
+	It("follows the labels of PolicySets and namespaces", func(ctx SpecContext) {
+		f.labeledSet("app-b", nil, `{"bindingRefs":[{"name":"grant"}]}`)
+		f.observation.NamespaceLabels["other"] = map[string]string{"owner": "infra"}
+		compiled := f.compile()
+		Expect(decide(ctx, compiled.Prepared, "get", "pods", "app-b", "bob").Result).To(Equal(model.Result("NoOpinion")))
+		Expect(decide(ctx, compiled.Prepared, "get", "pods", "other", "carol").Result).To(Equal(model.Result("Allow")))
+	})
+
+	It("checks cycles and descendant prohibitions through a match without failing its siblings", func(ctx SpecContext) {
+		f.labeledSet("app-a", map[string]string{"entry": "app"}, `{"bindingRefs":[{"name":"grant"},{"name":"apps","namespace":"policies"}]}`)
+		f.labeledSet("app-b", map[string]string{"entry": "app"}, `{"bindingRefs":[{"name":"grant"}],"prohibitionRefs":[{"name":"grant"}]}`)
+		compiled := f.compile()
+		Expect(compiled.Diagnostics).To(ContainElements(HaveField("Reason", model.ReasonCycle), HaveField("Reason", model.ReasonDenyOutsideRoot)))
+		Expect(decide(ctx, compiled.Prepared, "get", "pods", "app-a", "alice").Result).To(Equal(model.Result("Allow")))
+		Expect(decide(ctx, compiled.Prepared, "get", "pods", "app-b", "bob").Result).To(Equal(model.Result("NoOpinion")))
+	})
+
+	It("caps the delegation below each match with the selecting binding's maxDepth", func(ctx SpecContext) {
+		f.custom(model.KindPolicyBinding, "apps", `{"subjectMatch":{},"policySelector":{"namespaceSelector":{"matchLabels":{"owner":"infra"}},"selector":{"matchLabels":{"entry":"app"}}},"constraints":{"policyRef":{"name":"ceiling"},"maxDepth":0}}`)
+		f.customAt("app-b", model.KindPolicyBinding, "nested", `{"policyRef":{"kind":"PolicySet","name":"inner"},"subjectMatch":{}}`)
+		f.customAt("app-b", model.KindPolicyBinding, "inner-grant", `{"policyRef":{"name":"all","namespace":"policies"},"subjects":[{"kind":"User","name":"erin"}]}`)
+		f.customAt("app-b", model.KindPolicySet, "inner", `{"bindingRefs":[{"name":"inner-grant"}]}`)
+		f.labeledSet("app-b", map[string]string{"entry": "app"}, `{"bindingRefs":[{"name":"grant"},{"name":"nested"}]}`)
+		compiled := f.compile()
+		Expect(compiled.Diagnostics).To(ConsistOf(HaveField("Reason", model.ReasonDepthExceeded)))
+		Expect(decide(ctx, compiled.Prepared, "get", "pods", "app-b", "bob").Result).To(Equal(model.Result("Allow")))
+		Expect(decide(ctx, compiled.Prepared, "get", "pods", "app-b", "erin").Result).To(Equal(model.Result("NoOpinion")))
+	})
+
+	It("fails only a match that is invalid or exceeds its branch limits", func(ctx SpecContext) {
+		f.limits.MaxContextualUsesPerBranch = 6
+		bindings := make([]string, 0, 6)
+		for index := range 6 {
+			f.customAt("app-a", model.KindPolicyBinding, fmt.Sprintf("grant-%d", index), `{"policyRef":{"name":"all","namespace":"policies"},"subjects":[{"kind":"User","name":"alice"}]}`)
+			bindings = append(bindings, fmt.Sprintf(`{"name":"grant-%d"}`, index))
+		}
+		f.labeledSet("app-a", map[string]string{"entry": "app"}, `{"bindingRefs":[`+strings.Join(bindings, ",")+`]}`)
+		invalid := validation.DecodeDocument(f.source, utils.Document(model.KindPolicySet, "app-c", "access", `{"bindingRefs":[{"name":"grant"}],"surprise":true}`))
+		invalid.Labels = map[string]string{"entry": "app"}
+		f.observation.Documents[invalid.Key.Reference()] = invalid
+		f.observation.NamespaceLabels["app-c"] = map[string]string{"owner": "infra"}
+		compiled := f.compile()
+		Expect(compiled.Diagnostics).To(ContainElements(HaveField("Reason", model.ReasonResourceLimitExceeded), HaveField("Reason", model.ReasonInvalidDocument)))
+		Expect(decide(ctx, compiled.Prepared, "get", "pods", "app-b", "bob").Result).To(Equal(model.Result("Allow")))
+	})
+
+	Context("with grants that cover a request only together", func() {
+		BeforeEach(func() {
+			for name, operator := range map[string]string{"in": "In", "notin": "NotIn"} {
+				f.custom(model.KindPolicy, name, fmt.Sprintf(`{"include":[{"apiGroups":[""],"resources":["pods"],"verbs":["list"],"namespaces":["one"],"labelSelector":{"matchExpressions":[{"key":"tier","operator":%q,"values":["frontend"]}]}}]}`, operator))
+			}
+			f.custom(model.KindPolicyBinding, "tier-in", `{"policyRef":{"name":"in"},"subjectMatch":{}}`)
+			f.custom(model.KindPolicySet, "root", `{"bindingRefs":[{"name":"apps"},{"name":"tier-in"}]}`)
+			f.customAt("app-a", model.KindPolicyBinding, "grant", `{"policyRef":{"name":"notin","namespace":"policies"},"subjectMatch":{}}`)
+		})
+
+		It("composes discovered grants with the root bindings' grants", func(ctx SpecContext) {
+			compiled := f.compile()
+			Expect(compiled.Diagnostics).To(BeEmpty())
+			Expect(decide(ctx, compiled.Prepared, "list", "pods", "one", "alice").Result).To(Equal(model.Result("Allow")))
+		})
+
+		It("grants each diagram on its own past MaxMergeNodes", func(ctx SpecContext) {
+			f.limits.MaxMergeNodes = 1
+			compiled := f.compile()
+			authority := compiled.Prepared.Endpoints["cluster"].Authorities[0]
+			Expect(authority.ComposedAllowDiagramID).To(BeEmpty())
+			Expect(authority.IndependentAllowDiagramIDs).To(HaveLen(4))
+			Expect(compiled.Diagnostics).To(ConsistOf(HaveField("Reason", model.ReasonGrantsNotComposed)))
+			Expect(decide(ctx, compiled.Prepared, "list", "pods", "one", "alice").Result).To(Equal(model.Result("NoOpinion")))
+			Expect(decide(ctx, compiled.Prepared, "get", "pods", "app-b", "bob").Result).To(Equal(model.Result("Allow")))
+		})
+	})
+
+	It("detaches the matches of a selection inside a match to the authority, counting them toward MaxSelectedBranches", func(ctx SpecContext) {
+		f.customAt("app-a", model.KindPolicyBinding, "tools", `{"subjectMatch":{},"policySelector":{"namespaceSelector":{"matchLabels":{"owner":"tools"}},"selector":{"matchLabels":{"entry":"tool"}}}}`)
+		f.labeledSet("app-a", map[string]string{"entry": "app"}, `{"bindingRefs":[{"name":"grant"},{"name":"tools"}]}`)
+		f.customAt("tool-x", model.KindPolicyBinding, "grant", `{"policyRef":{"name":"all","namespace":"policies"},"subjects":[{"kind":"User","name":"dave"}]}`)
+		f.labeledSet("tool-x", map[string]string{"entry": "tool"}, `{"bindingRefs":[{"name":"grant"}]}`)
+		f.observation.NamespaceLabels["tool-x"] = map[string]string{"owner": "tools"}
+		compiled := f.compile()
+		Expect(compiled.Diagnostics).To(BeEmpty())
+		Expect(compiled.Selections).To(HaveLen(2))
+		Expect(decide(ctx, compiled.Prepared, "get", "pods", "tool-x", "dave").Result).To(Equal(model.Result("Allow")))
+		Expect(decide(ctx, compiled.Prepared, "get", "secrets", "tool-x", "dave").Result).To(Equal(model.Result("NoOpinion")))
+		Expect(compiled.Prepared.Contributions).To(ContainElement(HaveField("Path", ContainElements(
+			key("app-a", model.KindPolicyBinding, "tools"), key("tool-x", model.KindPolicySet, "access"),
+		))))
+
+		f.limits.MaxSelectedBranches = 2
+		compiled = f.compile()
+		Expect(compiled.Diagnostics).To(ConsistOf(SatisfyAll(
+			HaveField("Reason", model.ReasonResourceLimitExceeded),
+			HaveField("Path", ContainElement(key("app-a", model.KindPolicyBinding, "tools"))),
+		)))
+		Expect(decide(ctx, compiled.Prepared, "get", "pods", "tool-x", "dave").Result).To(Equal(model.Result("NoOpinion")))
+		Expect(decide(ctx, compiled.Prepared, "get", "pods", "app-a", "alice").Result).To(Equal(model.Result("Allow")))
+	})
+
+	It("fails a selection whole once the authority's selections would exceed MaxSelectedBranches", func(ctx SpecContext) {
+		f.limits.MaxSelectedBranches = 2
+		f.custom(model.KindPolicyBinding, "others", `{"subjectMatch":{},"policySelector":{"namespaceSelector":{"matchLabels":{"owner":"netsec"}},"selector":{"matchLabels":{"entry":"app"}}},"constraints":{"policyRef":{"name":"ceiling"}}}`)
+		f.custom(model.KindPolicySet, "root", `{"bindingRefs":[{"name":"apps"},{"name":"others"}]}`)
+		compiled := f.compile()
+		Expect(compiled.Diagnostics).To(ConsistOf(SatisfyAll(
+			HaveField("Reason", model.ReasonResourceLimitExceeded),
+			HaveField("Message", ContainSubstring("match more than 2 PolicySets")),
+			HaveField("Path", ContainElement(key("policies", model.KindPolicyBinding, "others"))),
+		)))
+		Expect(decide(ctx, compiled.Prepared, "get", "pods", "app-a", "alice").Result).To(Equal(model.Result("Allow")))
+		Expect(decide(ctx, compiled.Prepared, "get", "pods", "other", "carol").Result).To(Equal(model.Result("NoOpinion")))
+	})
+
+	It("reports a selection its use can't read, and records only the selections it evaluates", func() {
+		f.custom(model.KindPolicyBinding, "apps", `{"subjectMatch":{},"policySelector":{"sourceRef":{"namespace":"control","name":"elsewhere"},"namespaceSelector":{},"selector":{}}}`)
+		compiled := f.compile()
+		Expect(compiled.Diagnostics).To(ConsistOf(HaveField("Reason", model.ReasonSourceNotAllowed)))
+		Expect(compiled.Selections).To(BeEmpty())
+		f.custom(model.KindPolicyBinding, "apps", `{"subjectMatch":{},"policySelector":{"namespaceSelector":{"matchLabels":{"owner":"infra"}},"selector":{}}}`)
+		f.observation.CollectsNamespaceLabels, f.observation.NamespaceLabels = false, nil
+		compiled = f.compile()
+		Expect(compiled.Diagnostics).To(ConsistOf(HaveField("Reason", model.ReasonNamespaceLabelsNotCollected)))
+		Expect(compiled.Selections).To(HaveLen(1))
+	})
+
+	It("fails a selecting binding authoritatively as an authority's entry or a prohibition", func(ctx SpecContext) {
+		f.custom(model.KindPolicySet, "root", `{"prohibitionRefs":[{"name":"apps"}]}`)
+		compiled := f.compile()
+		Expect(compiled.Prepared.Issues).To(ConsistOf(HaveField("Reason", model.ReasonKindMismatch)))
+		Expect(decide(ctx, compiled.Prepared, "get", "pods", "app-a", "alice").Result).To(Equal(model.Result("Deny")))
+		f.config.Endpoints[0].Authorities[0].Binding.Name = "apps"
+		compiled = f.compile()
+		Expect(compiled.Prepared.Issues).To(ConsistOf(SatisfyAll(HaveField("Reason", model.ReasonKindMismatch), HaveField("Message", ContainSubstring("selects PolicySets")))))
+		Expect(decide(ctx, compiled.Prepared, "get", "pods", "app-a", "alice").Result).To(Equal(model.Result("Deny")))
 	})
 })

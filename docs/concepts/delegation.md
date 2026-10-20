@@ -1,6 +1,6 @@
 # Delegation
 
-Delegation lets a platform team hand a slice of authority to another team, which can manage its own grants inside that slice without being able to exceed it. In k8s-authz, a `PolicyBinding` that targets a `PolicySet` is a delegation, and its `constraints` define the slice.
+Delegation lets a platform team hand a slice of authority to another team, which can manage its own grants inside that slice without being able to exceed it. In k8s-authz, a `PolicyBinding` that targets a `PolicySet` is a delegation, and its `constraints` define the slice. A binding can also delegate to every `PolicySet` a selector matches; see [Discovering PolicySets](#discovering-policysets).
 
 This page builds on the [policy model](policy-model.md).
 
@@ -153,7 +153,75 @@ spec:
 
 Independently, no chain may go more than 16 `PolicySet` levels below its root. A delegation past either limit fails with `DepthExceeded` and grants nothing.
 
-`sourceRefs` and `maxDepth` apply only to bindings that target a `PolicySet`.
+`sourceRefs` and `maxDepth` apply only to bindings that target a `PolicySet` or select them.
+
+## Discovering PolicySets
+
+A binding with a `policySelector` in place of a `policyRef` delegates to each `PolicySet` the selector matches. A tenant writes the selecting binding once, and every application that publishes a labeled entry `PolicySet` in an eligible namespace attaches beneath it, without anyone maintaining a list of applications:
+
+```yaml
+# Owned by the infrastructure tenant, in its own source.
+apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicyBinding
+metadata:
+  namespace: infrastructure-policies
+  name: applications
+spec:
+  subjectMatch: {}
+  policySelector:
+    sourceRef:
+      namespace: authz-system
+      name: workloads
+    namespaceSelector:
+      matchLabels:
+        example.com/policy-owner: infrastructure
+    selector:
+      matchLabels:
+        example.com/entrypoint: application
+  constraints:
+    policyRef:
+      name: application-ceiling
+    maxDepth: 2
+---
+# Owned by one application, in the workloads source.
+apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicySet
+metadata:
+  namespace: guacamole
+  name: access
+  labels:
+    example.com/entrypoint: application
+spec:
+  bindingRefs:
+    - name: operators
+```
+
+Each match is an ordinary delegation from the selecting binding. Its subjects, bound, `maxDepth` and `sourceRefs` apply to every match exactly as they would to a `policyRef` target, and so do the depth, cycle and `DenyOutsideRoot` checks. A grant's path shows the selecting binding and then the matched `PolicySet`, so [explain](../guides/validating-and-explaining.md) attributes each grant to the selection that attached it.
+
+- `selector` matches `PolicySet`s by their own labels. Only `PolicySet`s are selected.
+- `namespaceSelector` matches the labels of the namespaces in the selected source. A non-empty selector needs a source with [`namespaceLabels: Collect`](../guides/policy-sources.md#namespace-labels); without it the binding fails with `NamespaceLabelsNotCollected`. `namespaceSelector: {}` matches every namespace the source collects.
+- `sourceRef` names the source, which must be one the binding may read. Omitted, it's the binding's own source. `constraints.sourceRefs`, when set, must include it.
+- Nothing matching grants nothing, and isn't an issue.
+- A label change is a change like any other: the next compile attaches a `PolicySet` that newly matches and detaches one that no longer does.
+
+Discovered applications are peers under the tenant's authority. The selecting binding's constraints apply to each of them alike; there is no per-application allocation.
+
+Each match compiles in a branch of its own, so a match that is invalid or exceeds its limits fails alone while the others still grant. Their grants combine with the root `PolicySet`'s bindings' grants as those combine with each other, and when the combination exceeds its limit, each grants on its own and the authority reports `GrantsNotComposed`. A selection that matches more than 256 `PolicySet`s fails as a whole, and so does one that would take its authority past 1024 discovered `PolicySet`s across all its selections, counted in a fixed compile order. Both fail with `ResourceLimitExceeded`; a selection is never truncated.
+
+A selecting binding works only as an entry in a `PolicySet`'s `bindingRefs`. As an authority's entry binding, or in `prohibitionRefs`, it's an authoritative failure with `KindMismatch`.
+
+### What discovery trusts
+
+Discovery grants no new authority. A selection reads only sources its binding may read, so it reaches nothing a `bindingRefs` entry couldn't name. What changes is who can cause an attachment: anyone who can write a labeled `PolicySet` in an eligible namespace of the selected source, and anyone who can label that source's namespaces.
+
+Eligibility is checked on the matched `PolicySet`, the root of the attached subtree, so a publisher in an ineligible namespace can't attach itself. An eligible document can still reference anything in its allowed sources, as explicit references can, so whether every path to a team passes through a particular bound depends on who writes the eligible documents.
+
+Two deployment rules carry the boundary:
+
+- Each source cluster protects the namespace label keys selections use, with admission policy that limits who may set them.
+- An eligible namespace has exactly one publisher. A namespace several teams write to can't be eligible for any of them. Each team publishes its entry from a namespace it owns and grants into the shared one, since a document's namespace doesn't limit where it grants.
+
+[Security](../operations/security.md#discovery) describes both.
 
 ## Prohibitions
 
@@ -176,7 +244,7 @@ Referenced from the root `PolicySet`'s `prohibitionRefs`, this binding denies Se
 Rules for prohibitions:
 
 - They apply only in the root `PolicySet`. A `PolicySet` reached through delegation that has `prohibitionRefs` fails with `DenyOutsideRoot`, and its whole branch grants nothing. Delegates can't deny; they can only decline to grant.
-- A prohibition binding must target a `Policy`, `Role`, or `ClusterRole`. Targeting a `PolicySet` is an authoritative failure.
+- A prohibition binding must target a `Policy`, `Role`, or `ClusterRole`. Targeting or selecting `PolicySet`s is an authoritative failure.
 - A prohibition applies to principals that match both the entry binding and the prohibition binding, and only within the entry binding's bound.
 - A prohibition can't carry a Rego condition, from its own Policy or from a bound. One that would fails with `ConditionalProhibition`. Prohibitions are decided without running conditions.
 - A prohibition that can't be resolved makes matching requests return `whenEvaluationFails` rather than silently allowing them.

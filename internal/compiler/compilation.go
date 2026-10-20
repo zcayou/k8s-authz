@@ -10,9 +10,14 @@ import (
 )
 
 type Compilation struct {
+	// Limits are the limits it compiled under.
+	Limits   Limits
 	Prepared model.PreparedRevision
 	// References are the documents the compilation read.
-	References           map[model.Reference]struct{}
+	References map[model.Reference]struct{}
+	// Selections are the selections the compilation evaluated, in digest order.
+	// A selection's outcome can change without any document it read changing.
+	Selections           []model.Selection
 	Diagnostics          []model.Issue
 	DiagnosticsTruncated bool
 }

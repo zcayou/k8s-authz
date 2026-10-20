@@ -37,9 +37,22 @@ func instance(name, origin string) model.SourceInstance {
 	return model.SourceInstance{Key: model.SourceKey{Namespace: "control", Name: name}, UID: name + "-uid", Origin: origin}
 }
 
+// registration registers instance with a collection that covers every
+// document and reads no namespace labels.
 func registration(instance model.SourceInstance, digest string) source.Registration {
-	return source.Registration{Instance: instance, Digest: digest}
+	return covered(instance, digest, utils.Coverage{})
 }
+
+func covered(instance model.SourceInstance, digest string, coverage utils.Coverage) source.Registration {
+	return source.Registration{Instance: instance, Coverage: coverage, Digest: digest}
+}
+
+var (
+	// keptOnly covers only the documents named kept.
+	keptOnly = utils.Coverage{Documents: func(reference model.Reference) bool { return reference.Name == "kept" }}
+	// everyNamespace covers every document and reads every namespace's labels.
+	everyNamespace = utils.Coverage{Namespaces: func(string) bool { return true }}
+)
 
 func reference(key model.SourceKey, name string) model.Reference {
 	return model.Reference{Source: key, Group: api.GroupVersion.Group, Kind: model.KindPolicy, Namespace: "policies", Name: name}
@@ -51,6 +64,12 @@ func complete(instance model.SourceInstance, names ...string) model.SourceObserv
 	for _, name := range names {
 		observation.Documents[reference(instance.Key, name)] = model.DocumentState{Document: &model.Document{}, UID: name + "-uid", Digest: name}
 	}
+	return observation
+}
+
+// labeled returns observation collecting the namespace labels namespaces.
+func labeled(observation model.SourceObservation, namespaces map[string]map[string]string) model.SourceObservation {
+	observation.CollectsNamespaceLabels, observation.NamespaceLabels = true, namespaces
 	return observation
 }
 

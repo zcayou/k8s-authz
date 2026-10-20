@@ -91,6 +91,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiv1alpha1.PolicyImportApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("PolicyRef"):
 		return &apiv1alpha1.PolicyRefApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("PolicySelector"):
+		return &apiv1alpha1.PolicySelectorApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("PolicySet"):
 		return &apiv1alpha1.PolicySetApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("PolicySetSpec"):

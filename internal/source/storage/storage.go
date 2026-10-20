@@ -32,12 +32,15 @@ import (
 // secretType marks the Secrets that hold a source's cached view.
 const secretType corev1.SecretType = "authorization.zctx.io/source-cache"
 
+var namespaceKind = corev1.SchemeGroupVersion.WithKind("Namespace")
+
 const (
-	sourceLabel      = "authorization.zctx.io/source"
-	chunkLabel       = "authorization.zctx.io/cache-chunk"
-	originAnnotation = "authorization.zctx.io/origin"
-	digestAnnotation = "authorization.zctx.io/cache-digest"
-	documentsKey     = "documents"
+	sourceLabel               = "authorization.zctx.io/source"
+	chunkLabel                = "authorization.zctx.io/cache-chunk"
+	originAnnotation          = "authorization.zctx.io/origin"
+	digestAnnotation          = "authorization.zctx.io/cache-digest"
+	namespaceLabelsAnnotation = "authorization.zctx.io/namespace-labels"
+	documentsKey              = "documents"
 	// maxChunkBytes keeps each Secret well under the API server's 1 MiB object
 	// limit.
 	maxChunkBytes = 512 << 10
@@ -45,21 +48,38 @@ const (
 
 // encodedView is a view encoded for the cache.
 type encodedView struct {
-	// digest identifies the documents.
-	digest string
-	origin string
-	// chunks is the gzip'd JSON array of the documents, split into the data
-	// of one Secret each.
+	// digest identifies the documents and namespace labels.
+	digest          string
+	origin          string
+	namespaceLabels api.NamespaceLabels
+	// chunks is the gzip'd JSON array of the documents and namespaces, split
+	// into the data of one Secret each.
 	chunks [][]byte
 }
 
-// encode encodes view's documents as a gzip'd JSON array of their objects,
-// in reference order.
+// encode encodes view as a gzip'd JSON array of its documents' objects,
+// in reference order, followed by a minimal v1 Namespace for each namespace
+// whose labels it holds, in name order.
 func encode(view model.SourceObservation) (encodedView, error) {
 	references := slices.SortedFunc(maps.Keys(view.Documents), func(a, b model.Reference) int { return cmp.Compare(a.String(), b.String()) })
-	objects := make([]json.RawMessage, 0, len(references))
+	objects := make([]json.RawMessage, 0, len(references)+len(view.NamespaceLabels))
 	for _, reference := range references {
 		objects = append(objects, view.Documents[reference].Object)
+	}
+	namespaceLabels := api.NamespaceLabelsIgnore
+	if view.CollectsNamespaceLabels {
+		namespaceLabels = api.NamespaceLabelsCollect
+	}
+	for _, name := range slices.Sorted(maps.Keys(view.NamespaceLabels)) {
+		namespace := &unstructured.Unstructured{}
+		namespace.SetGroupVersionKind(namespaceKind)
+		namespace.SetName(name)
+		namespace.SetLabels(view.NamespaceLabels[name])
+		encoded, err := namespace.MarshalJSON()
+		if err != nil {
+			return encodedView{}, fmt.Errorf("encode cached Namespace %s: %w", name, err)
+		}
+		objects = append(objects, encoded)
 	}
 	documents, err := json.Marshal(objects)
 	if err != nil {
@@ -74,9 +94,10 @@ func encode(view model.SourceObservation) (encodedView, error) {
 		return encodedView{}, fmt.Errorf("compress cached documents: %w", err)
 	}
 	return encodedView{
-		digest: digest(documents),
-		origin: view.Instance.Origin,
-		chunks: slices.Collect(slices.Chunk(compressed.Bytes(), maxChunkBytes)),
+		digest:          digest(namespaceLabels, documents),
+		origin:          view.Instance.Origin,
+		namespaceLabels: namespaceLabels,
+		chunks:          slices.Collect(slices.Chunk(compressed.Bytes(), maxChunkBytes)),
 	}, nil
 }
 
@@ -108,7 +129,7 @@ func Write(ctx context.Context, writer client.Client, cached client.Reader, owne
 		secret := corev1ac.Secret(chunkName(owner.Name, index), owner.Namespace).
 			WithType(secretType).
 			WithLabels(map[string]string{sourceLabel: owner.Name, chunkLabel: strconv.Itoa(index)}).
-			WithAnnotations(map[string]string{originAnnotation: content.origin, digestAnnotation: content.digest}).
+			WithAnnotations(map[string]string{originAnnotation: content.origin, digestAnnotation: content.digest, namespaceLabelsAnnotation: string(content.namespaceLabels)}).
 			WithOwnerReferences(reference).
 			WithData(map[string][]byte{documentsKey: chunk})
 		if err := writer.Apply(ctx, secret, client.ForceOwnership); err != nil {
@@ -128,7 +149,7 @@ func Write(ctx context.Context, writer client.Client, cached client.Reader, owne
 }
 
 // holds reports whether secrets are exactly content's chunks of source's
-// cache, each carrying content's origin and digest.
+// cache, each carrying content's origin, digest and namespace-label setting.
 func holds(secrets []metav1.PartialObjectMetadata, source string, content encodedView) bool {
 	if len(secrets) != len(content.chunks) {
 		return false
@@ -140,7 +161,8 @@ func holds(secrets []metav1.PartialObjectMetadata, source string, content encode
 	for index := range content.chunks {
 		secret, ok := names[chunkName(source, index)]
 		if !ok || secret.Labels[chunkLabel] != strconv.Itoa(index) ||
-			secret.Annotations[digestAnnotation] != content.digest || secret.Annotations[originAnnotation] != content.origin {
+			secret.Annotations[digestAnnotation] != content.digest || secret.Annotations[originAnnotation] != content.origin ||
+			secret.Annotations[namespaceLabelsAnnotation] != string(content.namespaceLabels) {
 			return false
 		}
 	}
@@ -167,16 +189,18 @@ func Read(ctx context.Context, reader client.Reader, instance model.SourceInstan
 	return view, true, nil
 }
 
-// restore joins the chunks of one write and decodes its documents.
+// restore joins the chunks of one write and decodes its documents
+// and namespaces.
 func restore(secrets []corev1.Secret, instance model.SourceInstance) (model.SourceObservation, error) {
 	chunks := make([][]byte, len(secrets))
 	expected := secrets[0].Annotations[digestAnnotation]
+	namespaceLabels := api.NamespaceLabels(secrets[0].Annotations[namespaceLabelsAnnotation])
 	instance.Origin = cmp.Or(instance.Origin, secrets[0].Annotations[originAnnotation])
 	for _, secret := range secrets {
 		switch {
 		case secret.Annotations[originAnnotation] != instance.Origin:
 			return model.SourceObservation{}, fmt.Errorf("cache Secret %s was collected from origin %q", secret.Name, secret.Annotations[originAnnotation])
-		case secret.Annotations[digestAnnotation] != expected:
+		case secret.Annotations[digestAnnotation] != expected || api.NamespaceLabels(secret.Annotations[namespaceLabelsAnnotation]) != namespaceLabels:
 			return model.SourceObservation{}, fmt.Errorf("cache Secret %s belongs to another write", secret.Name)
 		}
 		index, err := strconv.Atoi(secret.Labels[chunkLabel])
@@ -193,7 +217,7 @@ func restore(secrets []corev1.Secret, instance model.SourceInstance) (model.Sour
 	if err != nil {
 		return model.SourceObservation{}, fmt.Errorf("decompress cached documents: %w", err)
 	}
-	if digest(documents) != expected {
+	if digest(namespaceLabels, documents) != expected {
 		return model.SourceObservation{}, errors.New("cached documents don't match their digest")
 	}
 	var objects []json.RawMessage
@@ -201,10 +225,20 @@ func restore(secrets []corev1.Secret, instance model.SourceInstance) (model.Sour
 		return model.SourceObservation{}, fmt.Errorf("decode cached documents: %w", err)
 	}
 	view := model.SourceObservation{Instance: instance, Complete: true, Documents: make(map[model.Reference]model.DocumentState, len(objects))}
+	if namespaceLabels == api.NamespaceLabelsCollect {
+		view.CollectsNamespaceLabels, view.NamespaceLabels = true, map[string]map[string]string{}
+	}
 	for _, encoded := range objects {
 		object := &unstructured.Unstructured{}
 		if err := object.UnmarshalJSON(encoded); err != nil {
 			return model.SourceObservation{}, fmt.Errorf("decode cached document: %w", err)
+		}
+		if object.GroupVersionKind() == namespaceKind {
+			if !view.CollectsNamespaceLabels {
+				return model.SourceObservation{}, errors.New("cached Namespace in a view without namespace labels")
+			}
+			view.NamespaceLabels[object.GetName()] = object.GetLabels()
+			continue
 		}
 		state := validation.DecodeCachedDocument(instance, object)
 		state.Object = encoded
@@ -234,7 +268,12 @@ func chunkName(source string, index int) string {
 	return source + "-source-cache-" + strconv.Itoa(index)
 }
 
-func digest(documents []byte) string {
-	sum := sha256.Sum256(documents)
-	return hex.EncodeToString(sum[:])
+// digest identifies one write: its namespace-label setting and its encoded
+// objects.
+func digest(namespaceLabels api.NamespaceLabels, documents []byte) string {
+	hash := sha256.New()
+	hash.Write([]byte(namespaceLabels))
+	hash.Write([]byte{0})
+	hash.Write(documents)
+	return hex.EncodeToString(hash.Sum(nil))
 }

@@ -44,7 +44,26 @@ collection:
 
 A document outside every range is invisible to the source, even if the reader's credential could read it. Keep collections as narrow as the design allows: a collection is the boundary of what a source can contribute, and a reference to anything outside it fails with `MissingReference`.
 
-Narrowing a collection narrows what the source serves right away. Widening it takes effect once the reader has read the new range.
+Narrowing a collection narrows what the source serves right away, even while its credential fails. Widening it takes effect once the reader has read the new range.
+
+## Namespace labels
+
+A [`policySelector`](../concepts/delegation.md#discovering-policysets) with a non-empty `namespaceSelector` selects by the labels of the source's namespaces, which a source reads only when asked:
+
+```yaml
+spec:
+  collection:
+    - kinds: [Policy, PolicyBinding, PolicySet]
+      namespaces: ["*"]
+      names: ["*"]
+  namespaceLabels: Collect
+```
+
+With `namespaceLabels: Collect`, the source reads the labels of the namespaces its collection covers: every namespace when a range selects `"*"`, otherwise each namespace a range names. The collection stays the only boundary of what the source reads. The default, `Ignore`, reads no namespace labels.
+
+The reader then needs `list` and `watch` on Namespaces: cluster-wide for a `"*"` range, or restricted with `resourceNames` to the named namespaces, since the reader reads each named namespace through its own field selector. The source isn't `Synchronized` until it has read them, and a failed list or watch of Namespaces is `WatchFailing`, like any other.
+
+Labels are policy input. A label-only change to a namespace, or to a `PolicySet`, changes the source's view: it's persisted and recompiles the services whose selections it affects. Labels that tooling rewrites on every release, such as `helm.sh/chart` on a `PolicySet`, therefore rewrite the persisted view too. Switching `namespaceLabels` replaces the reader; switching it to `Ignore` drops the labels from the view at once.
 
 ## Local and remote sources
 
@@ -73,7 +92,7 @@ When a kubeconfig is set, the operator uses only that credential. It never falls
 A remote API needs:
 
 1. The k8s-authz CRDs, from the same release as the operator, if the source collects `Policy`, `PolicyBinding`, or `PolicySet` documents.
-2. A reader identity with `list` and `watch` on the collected kinds, in the collected namespaces, and on the CustomResourceDefinitions of the k8s-authz kinds it collects (the reader checks that they serve `v1alpha1`).
+2. A reader identity with `list` and `watch` on the collected kinds, in the collected namespaces, on those Namespaces when `namespaceLabels` is `Collect` (see [Namespace labels](#namespace-labels)), and on the CustomResourceDefinitions of the k8s-authz kinds it collects (the reader checks that they serve `v1alpha1`).
 
 It needs no operator and no engines.
 
@@ -87,7 +106,7 @@ Store the kubeconfig in the control cluster:
 kubectl -n authz-system create secret generic teams-api-reader --from-file=kubeconfig=teams-reader.kubeconfig
 ```
 
-A local source without a kubeconfig reads with the operator's own ServiceAccount, which the default installation already allows to read every policy and RBAC document.
+A local source without a kubeconfig reads with the operator's own ServiceAccount, which the default installation already allows to read every policy and RBAC document and every Namespace.
 
 ## Credential rotation
 
@@ -123,7 +142,7 @@ Two independent settings control a source, both defaulting to `Active`:
 
 ## The persistent cache
 
-The leader stores each source's view in Secrets of type `authorization.zctx.io/source-cache` in the `PolicySource`'s namespace, named `<policysource>-source-cache-<n>` and owned by the `PolicySource`, so they're deleted with it. When an operator restarts, it restores each source's view from these Secrets before it compiles anything, so a restart never installs policy with a source missing, even if the source API is down or the credential is broken. A cache Secret that is deleted or edited out of band is rewritten. You don't need to manage them.
+The leader stores each source's view in Secrets of type `authorization.zctx.io/source-cache` in the `PolicySource`'s namespace, named `<policysource>-source-cache-<n>` and owned by the `PolicySource`, so they're deleted with it. When an operator restarts, it restores each source's view from these Secrets before it compiles anything, namespace labels included, so a restart never installs policy with a source missing, even if the source API is down or the credential is broken. A cache Secret that is deleted or edited out of band is rewritten. You don't need to manage them.
 
 ## Upgrades and schema versions
 

@@ -3,7 +3,6 @@
 package e2e
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -15,24 +14,6 @@ import (
 )
 
 var _ = Describe("Member cluster", Label("member-cluster"), func() {
-	// expectMemberPodList waits until the member's API server lets the admin
-	// list pods in namespace when allowed, or refuses it with the webhook's
-	// fallback otherwise.
-	expectMemberPodList := func(ctx context.Context, namespace string, allowed bool) {
-		GinkgoHelper()
-		Eventually(func(g Gomega) {
-			output, err := suite.member.kubectl(ctx, "get", "pods", "-n", namespace,
-				"--as="+e2eUser, "--as-group="+e2eAdminGroup)
-			if allowed {
-				g.Expect(err).NotTo(HaveOccurred())
-				return
-			}
-			g.Expect(err).To(HaveOccurred())
-			g.Expect(output).To(ContainSubstring("Forbidden"))
-			g.Expect(output).To(ContainSubstring("code=AuthorityFallback"))
-		}, 2*time.Minute).Should(Succeed())
-	}
-
 	BeforeEach(func(ctx SpecContext) {
 		expectBaseline(ctx)
 	})

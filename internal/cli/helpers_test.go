@@ -24,11 +24,25 @@ type validationReport struct {
 	Valid       bool         `json:"valid"`
 	Documents   int          `json:"documents"`
 	Diagnostics []diagnostic `json:"diagnostics"`
+	Selections  []struct {
+		Source            model.SourceKey    `json:"source"`
+		NamespaceSelector string             `json:"namespaceSelector"`
+		Selector          string             `json:"selector"`
+		Matches           []documentIdentity `json:"matches"`
+		Reason            model.IssueReason  `json:"reason"`
+	} `json:"selections"`
+}
+
+type documentIdentity struct {
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
 }
 
 type diagnostic struct {
 	File      string            `json:"file"`
 	Source    *model.SourceKey  `json:"source"`
+	Identity  documentIdentity  `json:"identity"`
 	FieldPath string            `json:"fieldPath"`
 	Severity  api.IssueSeverity `json:"severity"`
 	Reason    model.IssueReason `json:"reason"`

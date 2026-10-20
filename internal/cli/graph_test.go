@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -151,6 +152,107 @@ spec:
 			Entry("an undefined builtin", "control/platform=no.such.builtin", "no.such.builtin isn't a builtin this release defines"),
 			Entry("no namespace", "platform", "NAMESPACE/NAME"),
 		)
+	})
+
+	Describe("policy selections", func() {
+		const selecting = `apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicyBinding
+metadata: {namespace: policies, name: root}
+spec:
+  subjectMatch: {}
+  policyRef: {kind: PolicySet, name: root}
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicySet
+metadata: {namespace: policies, name: root}
+spec:
+  bindingRefs: [{name: applications}]
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicyBinding
+metadata: {namespace: policies, name: applications}
+spec:
+  subjectMatch: {}
+  policySelector:
+    namespaceSelector: {matchLabels: {owner: infra}}
+    selector: {matchLabels: {entry: application}}
+`
+		const applications = `apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicySet
+metadata: {namespace: app-a, name: access, labels: {entry: application}}
+spec: {}
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicySet
+metadata: {namespace: other, name: access, labels: {entry: application}}
+spec: {}
+---
+apiVersion: authorization.zctx.io/v1alpha1
+kind: PolicySet
+metadata: {namespace: stray, name: access, labels: {entry: application}}
+spec: {}
+`
+		const namespaces = `apiVersion: v1
+kind: Namespace
+metadata: {name: app-a, labels: {owner: infra}}
+---
+apiVersion: v1
+kind: Namespace
+metadata: {name: other, labels: {owner: netsec}}
+`
+		sources := func() []string {
+			return []string{
+				"--source", graphSourceFlag + writeFile(directory, "root.yaml", selecting),
+				"--source", graphSourceFlag + writeFile(directory, "applications.yaml", applications),
+				"--source", graphSourceFlag + writeFile(directory, "namespaces.yaml", namespaces),
+			}
+		}
+
+		It("reports each selection's matches and the labeled PolicySets its namespace selector leaves out", func(ctx SpecContext) {
+			code, report, stderr := validateGraph(ctx, append(sources(), "--namespace-labels", "control/platform")...)
+			Expect(code).To(Equal(0), stderr)
+			Expect(report.Documents).To(Equal(9))
+			Expect(report.Selections).To(ConsistOf(SatisfyAll(
+				HaveField("Source", model.SourceKey{Namespace: "control", Name: "platform"}),
+				HaveField("NamespaceSelector", "owner in (infra)"),
+				HaveField("Selector", "entry in (application)"),
+				HaveField("Matches", ConsistOf(documentIdentity{Kind: model.KindPolicySet, Namespace: "app-a", Name: "access"})),
+			)))
+			Expect(report.Diagnostics).To(ConsistOf(
+				SatisfyAll(HaveField("Reason", model.IssueReason("NamespaceNotSelected")), HaveField("Severity", api.IssueSeverityWarning), HaveField("Identity.Namespace", "other")),
+				SatisfyAll(HaveField("Reason", model.IssueReason("NamespaceNotSelected")), HaveField("Identity.Namespace", "stray"), HaveField("Message", ContainSubstring("holds no labels"))),
+			))
+
+			code, stdout, stderr := execute(ctx, "", append([]string{"validate", "graph", servicePath, "--namespace-labels", "control/platform"}, sources()...)...)
+			Expect(code).To(Equal(0), stderr)
+			Expect(string(stdout)).To(ContainSubstring("selection control/platform namespaces owner in (infra), PolicySets entry in (application): 1 match(es)\n  app-a/access\n"))
+		})
+
+		It("refuses Namespaces in a source that doesn't collect namespace labels, and compiles the selection as needing them", func(ctx SpecContext) {
+			code, report, _ := validateGraph(ctx, sources()...)
+			Expect(code).To(Equal(1))
+			Expect(report.Diagnostics).To(ContainElements(
+				SatisfyAll(HaveField("Reason", model.IssueReason("InvalidGraphInput")), HaveField("File", HaveSuffix("namespaces.yaml"))),
+				HaveField("Reason", model.ReasonNamespaceLabelsNotCollected),
+			))
+			Expect(report.Selections).To(ConsistOf(HaveField("Reason", model.ReasonNamespaceLabelsNotCollected)))
+		})
+
+		It("prints an empty selector, which matches everything, as {}", func(ctx SpecContext) {
+			everywhere := strings.Replace(selecting, "{matchLabels: {owner: infra}}", "{}", 1)
+			code, stdout, stderr := execute(ctx, "", "validate", "graph", servicePath,
+				"--source", graphSourceFlag+writeFile(directory, "root.yaml", everywhere),
+				"--source", graphSourceFlag+writeFile(directory, "applications.yaml", applications))
+			Expect(code).To(Equal(0), stderr)
+			Expect(string(stdout)).To(ContainSubstring("selection control/platform namespaces {}, PolicySets entry in (application): 3 match(es)\n"))
+		})
+
+		It("refuses --namespace-labels for a source no --source assigns", func(ctx SpecContext) {
+			code, report, stderr := validateGraph(ctx, append(sources(), "--namespace-labels", "control/other")...)
+			Expect(code).To(Equal(2))
+			Expect(report).To(BeZero())
+			Expect(stderr).To(ContainSubstring("--namespace-labels names control/other, which no --source assigns"))
+		})
 	})
 
 	It("requires the service file to hold one AuthorizationService", func(ctx SpecContext) {

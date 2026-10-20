@@ -52,6 +52,9 @@ const (
 	// reasonDiagnosticsTruncated means the compiler kept only part of its
 	// diagnostics.
 	reasonDiagnosticsTruncated model.IssueReason = "DiagnosticsTruncated"
+	// reasonNamespaceNotSelected means a PolicySet matches a selection's
+	// selector in a namespace its namespaceSelector doesn't select.
+	reasonNamespaceNotSelected model.IssueReason = "NamespaceNotSelected"
 )
 
 // documentIdentity identifies the document to which a diagnostic applies.
@@ -79,11 +82,13 @@ type diagnostic struct {
 	Path      []documentIdentity `json:"path,omitempty"`
 }
 
-// validationReport is the result of a document or graph validation.
+// validationReport is the result of a document or graph validation. Selections
+// are a graph validation's.
 type validationReport struct {
-	Valid       bool         `json:"valid"`
-	Documents   int          `json:"documents"`
-	Diagnostics []diagnostic `json:"diagnostics"`
+	Valid       bool              `json:"valid"`
+	Documents   int               `json:"documents"`
+	Diagnostics []diagnostic      `json:"diagnostics"`
+	Selections  []selectionReport `json:"selections,omitempty"`
 }
 
 func newValidateCommand() *cobra.Command {
@@ -399,6 +404,20 @@ func encodeValidationReport(writer io.Writer, output string, report validationRe
 	for _, item := range report.Diagnostics {
 		if _, err := fmt.Fprintf(writer, "%s:%d: %s %s: %s\n", item.File, item.Document, item.Severity, item.Reason, item.fieldMessage()); err != nil {
 			return err
+		}
+	}
+	for _, selection := range report.Selections {
+		outcome := fmt.Sprintf("%d match(es)", len(selection.Matches))
+		if selection.Reason != "" {
+			outcome = fmt.Sprintf("%s: %s", selection.Reason, selection.Message)
+		}
+		if _, err := fmt.Fprintf(writer, "selection %s/%s namespaces %s, PolicySets %s: %s\n", selection.Source.Namespace, selection.Source.Name, selection.NamespaceSelector, selection.Selector, outcome); err != nil {
+			return err
+		}
+		for _, match := range selection.Matches {
+			if _, err := fmt.Fprintf(writer, "  %s/%s\n", match.Namespace, match.Name); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

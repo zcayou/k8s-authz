@@ -44,6 +44,7 @@ type PolicySourceSupervisor struct {
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=authorization.zctx.io,resources=policies;policybindings;policysets,verbs=list;watch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings;clusterroles;clusterrolebindings,verbs=list;watch
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=list;watch
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,resourceNames=policies.authorization.zctx.io;policybindings.authorization.zctx.io;policysets.authorization.zctx.io,verbs=list;watch
 
 // Reconcile registers a PolicySource, or removes a deleted one. Until
@@ -63,13 +64,13 @@ func (s *PolicySourceSupervisor) Reconcile(ctx context.Context, request ctrl.Req
 		s.Registry.Remove(key)
 		return ctrl.Result{}, nil
 	}
-	collection := kubernetessource.NewCollection(object.Spec.Collection)
+	collection := kubernetessource.NewCollection(object.Spec)
 	instance := model.SourceInstance{Key: key, UID: string(object.UID)}
 	if object.Spec.Synchronization == api.SynchronizationPaused {
 		if err := s.restore(ctx, instance); err != nil {
 			return ctrl.Result{}, err
 		}
-		s.Registry.Pause(key, instance.UID, sourceSettings(object.Spec), collection.Collects)
+		s.Registry.Pause(key, instance.UID, sourceSettings(object.Spec), collection)
 		return ctrl.Result{}, nil
 	}
 	connection, err := s.connect(ctx, &object, collection)
@@ -80,7 +81,7 @@ func (s *PolicySourceSupervisor) Reconcile(ctx context.Context, request ctrl.Req
 	if err := s.restore(ctx, instance); err != nil {
 		return ctrl.Result{}, err
 	}
-	registration := source.Registration{Instance: instance, Digest: connection.digest, Settings: sourceSettings(object.Spec)}
+	registration := source.Registration{Instance: instance, Coverage: collection, Digest: connection.digest, Settings: sourceSettings(object.Spec)}
 	return ctrl.Result{}, s.Registry.Apply(registration, func() (source.Reader, error) {
 		if connection.err != nil {
 			return nil, connection.err
@@ -126,7 +127,8 @@ type policySourceConnection struct {
 	configuration *rest.Config
 	// origin is empty when the credential is unusable.
 	origin string
-	// digest covers the kubeconfig and the collection.
+	// digest covers the kubeconfig and the collection, including whether
+	// it reads namespace labels.
 	digest string
 	// err is a credential problem, which the registry records.
 	err error
